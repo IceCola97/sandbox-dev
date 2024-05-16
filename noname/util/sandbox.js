@@ -12,7 +12,6 @@ const SandboxSignal_ExitDomain = Symbol("ExitDomain");
 const SandboxSignal_UnpackProxy = Symbol("UnpackProxy");
 const SandboxSignal_Marshal = Symbol("Marshal");
 const SandboxSignal_TrapDomain = Symbol("TrapDomain");
-const SandboxSignal_NotifyDomain = Symbol("NotifyDomain");
 
 function isPrimitive(obj) {
     return Object(obj) !== obj;
