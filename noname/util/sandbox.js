@@ -436,6 +436,10 @@ class Marshal {
     }
 
     /**
+     * ```plain
+     * 拆除封送代理
+     * ```
+     * 
      * @typedef {[ 
      *     Domain,
      *     Object,
@@ -451,6 +455,10 @@ class Marshal {
     }
 
     /**
+     * ```plain
+     * 检查封送缓存
+     * ```
+     * 
      * @param {Object} obj 
      * @param {Domain} domain 
      * @returns {Object?} 
@@ -461,6 +469,10 @@ class Marshal {
     }
 
     /**
+     * ```plain
+     * 获取指定对象的封送规则引用
+     * ```
+     * 
      * @param {Object} obj 
      * @returns {{rule: Rule}} 
      */
@@ -506,7 +518,9 @@ class Marshal {
     }
 
     /**
+     * ```plain
      * 判断某个对象是否是其他运行域被封送的对象
+     * ```
      * 
      * @param {Object} obj 
      * @returns {boolean} 
@@ -516,12 +530,17 @@ class Marshal {
     }
 
     /**
+     * ```plain
+     * 陷入某个运行域并执行代码
+     * ```
+     * 
      * @param {Domain} domain 
      * @param {() => any} action 
      */
     static #trapDomain(domain, action) {
         const prevDomain = Domain.current;
 
+        // 如果可能，应该尽量避免陷入相同运行域
         if (prevDomain === domain)
             return console.warn("trapDomain 处于相同 domain"), action();
 
@@ -537,6 +556,10 @@ class Marshal {
     }
 
     /**
+     * ```plain
+     * 封送数组
+     * ```
+     * 
      * @param {Array} array 
      * @param {Domain} targetDomain 
      */
@@ -559,13 +582,19 @@ class Marshal {
      * @returns {Object} 
      */
     static #marshal(obj, targetDomain) {
+        // 基元封送
         if (isPrimitive(obj))
             return obj;
 
+        // 尝试拆除代理
         let [sourceDomain, target] =
             this.#marshalledProxies.has(obj)
                 ? this.#revertProxy(obj)
                 : [Domain.current, obj];
+
+        // target: 确保拆除了封送代理的对象
+        // sourceDomain: target所属的运行域
+        // targetDomain: 要封送到的运行域
 
         if (sourceDomain === targetDomain)
             return target;
@@ -575,6 +604,7 @@ class Marshal {
         if (!this.#shouldMarshal(target))
             return target;
 
+        // 异步封送
         if (sourceDomain.isPromise(target)) {
             const marshaller = (value => {
                 return Marshal.#trapDomain(sourceDomain, () => {
@@ -584,11 +614,13 @@ class Marshal {
             target = target.then(marshaller,
                 e => { throw marshaller(e); });
         } else {
+            // 全局变量封送
             const mapped = Globals.mapTo(target, sourceDomain, targetDomain);
 
             if (mapped != null)
                 return mapped;
 
+            // 错误封送
             if (sourceDomain.isError(target)) {
                 const errorCtor = target.constructor;
                 const mappedCtor = Globals.mapTo(errorCtor, sourceDomain, targetDomain);
@@ -602,17 +634,20 @@ class Marshal {
             }
         }
 
+        // 检查封送权限
         const ruleRef = this.#ensureRuleRef(target);
         const rule = ruleRef.rule;
 
         if (rule && !rule.canMarshalTo(targetDomain))
             throw new TypeError("无法将对象封送到目标运行域");
 
+        // 检查封送缓存
         const cached = this.#cacheProxy(target, targetDomain);
 
         if (cached)
             return cached;
 
+        // 创建封送代理
         const proxy = new Proxy(target, {
             apply(target, thisArg, argArray) {
                 const marshalledThis = Marshal.#marshal(thisArg, sourceDomain);
@@ -884,7 +919,9 @@ class Domain {
     }
 
     /**
+     * ```plain
      * 检查对象是否来自于当前的运行域
+     * ```
      * 
      * @param {Object} obj 
      * @returns {boolean} 
@@ -901,7 +938,9 @@ class Domain {
     }
 
     /**
+     * ```plain
      * 检查对象是否来自于当前的运行域的Promise
+     * ```
      * 
      * @param {Promise} promise 
      * @returns {boolean} 
@@ -916,7 +955,9 @@ class Domain {
     }
 
     /**
+     * ```plain
      * 检查对象是否来自于当前的运行域的Error
+     * ```
      * 
      * @param {Error} error 
      * @returns {boolean} 
@@ -1190,6 +1231,7 @@ class Sandbox {
         const marshalledContext = Marshal[SandboxExposer2]
             (SandboxSignal_Marshal, context, domain);
 
+        // 构建上下文拦截器
         const intercepter = new Proxy(scope, {
             has() {
                 return true;
@@ -1209,6 +1251,8 @@ class Sandbox {
             },
         });
 
+        // 构建陷入的沙盒闭包
+        // 同时对返回值进行封送
         return (() => {
             const prevDomain = Domain.current;
             return Marshal[SandboxExposer2](SandboxSignal_TrapDomain,
@@ -1324,6 +1368,7 @@ if (window.top === window) {
     Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
     iframe.remove();
 } else {
+    // 防止被不信任代码更改
     sealClass(Object);
     sealClass(Array);
     sealClass(Function);
