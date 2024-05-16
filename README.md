@@ -1,3 +1,5 @@
+(基于 noname-1.10.9 版本，用于开发sandbox)
+
 noname-server.exe的源码见以下仓库：
 
 https://github.com/nonameShijian/noname-server
