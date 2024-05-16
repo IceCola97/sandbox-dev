@@ -2,6 +2,7 @@ audio/*.TXT
 image/*.TXT
 audio
 image
+font
 extension/*
 !extension/boss
 !extension/cardpile
