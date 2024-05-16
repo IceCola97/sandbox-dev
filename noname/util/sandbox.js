@@ -273,6 +273,8 @@ class Rule {
  * 指向异步函数的构造函数，使用/AsyncFunction作为映射键名
  * 
  * 请注意，映射键名不得相同，不然会导致相互覆盖
+ * 全局变量映射表应该用于JavaScript的内建对象
+ * 因为只有内建对象才会在所有运行域同时都有
  * ```
  */
 const GLOBAL_PATHES = Object.freeze([
@@ -315,6 +317,10 @@ const GLOBAL_PATHES = Object.freeze([
     "/clearInterval",
     "/clearImmediate",
     "/eval",
+    "/parseInt",
+    "/parseFloat",
+    "/isNaN",
+    "/isFinite",
     "/alert",
     "/confirm",
     "/console",
@@ -1042,6 +1048,8 @@ class Sandbox {
     #domain = null;
     /** @type {Window} */
     #domainWindow = null;
+    /** @type {Document} */
+    #domainDocument = null;
     /** @type {typeof Object} */
     #domainObject = Object;
     /** @type {typeof Function} */
@@ -1053,6 +1061,7 @@ class Sandbox {
     constructor(initScope = null) {
         this.#domain = new Domain();
         this.#domainWindow = this.#domain[SandboxExposer](SandboxSignal_GetWindow);
+        this.#domainDocument = this.#domainWindow.document;
         this.#domainObject = this.#domainWindow.Object;
         this.#domainFunction = this.#domainWindow.Function;
 
@@ -1063,7 +1072,9 @@ class Sandbox {
     }
 
     /**
+     * ```plain
      * 获取当前的scope
+     * ```
      * 
      * @type {Object}
      */
@@ -1073,7 +1084,9 @@ class Sandbox {
     }
 
     /**
+     * ```plain
      * 获取当前沙盒内的运行域
+     * ```
      * 
      * @type {Domain}
      */
@@ -1082,7 +1095,33 @@ class Sandbox {
     }
 
     /**
+     * ```plain
+     * 获取当前沙盒内的document对象
+     * ```
+     * 
+     * @type {Document}
+     */
+    get document() {
+        return Marshal[SandboxExposer2]
+            (SandboxSignal_Marshal, this.#domainDocument, Domain.current);
+    }
+
+    /**
+     * ```plain
+     * 设置当前沙盒内的document对象
+     * ```
+     * 
+     * @type {Document}
+     */
+    set document(value) {
+        this.#domainDocument = Marshal[SandboxExposer2]
+            (SandboxSignal_Marshal, value, this.#domain);
+    }
+
+    /**
+     * ```plain
      * 向当前域注入内建对象
+     * ```
      */
     initBuiltins() {
         const builtins = {
@@ -1122,10 +1161,13 @@ class Sandbox {
             alert: this.#domainWindow.alert,
             confirm: this.#domainWindow.confirm,
             console: this.#domainWindow.console,
+            parseInt: this.#domainWindow.parseInt,
+            parseFloat: this.#domainWindow.parseFloat,
+            isFinite: this.#domainWindow.isFinite,
+            isNaN: this.#domainWindow.isNaN,
         };
 
         const hardBuiltins = {
-            document: this.#domainWindow.document,
             NaN: NaN,
             Infinity: Infinity,
             undefined: undefined,
@@ -1149,10 +1191,18 @@ class Sandbox {
             });
         }
 
+        Reflect.defineProperty(this.#scope, "document", {
+            get: (() => {
+                return this;
+            }).bind(this.#domainDocument),
+            enumerable: false,
+            configurable: false,
+        });
+
         Reflect.defineProperty(this.#scope, "window", {
             get: (() => {
-                return this.#scope;
-            }).bind(this),
+                return this;
+            }).bind(this.#scope),
             enumerable: false,
             configurable: false,
         });

@@ -1523,7 +1523,7 @@ export class Get extends Uninstantable {
 		return this.#sandboxStack[this.#sandboxStack.length - 1];
 	}
 
-	static createSandbox(initScope = null) {
+	static #ensureSandboxRules(){
 		if (!this.#sandboxRuleSet) {
 			const rule = new sandbox.Rule();
 			rule.canMarshal = false; // 禁止获取函数
@@ -1531,7 +1531,7 @@ export class Get extends Uninstantable {
 			rule.setGranted(sandbox.AccessAction.NEW, false); // 禁止函数new调用
 
 			// 不允许被远程代码访问的对象
-			const dangers = [
+			[
 				game.download,
 				game.readFile,
 				game.readFileAsText,
@@ -1545,13 +1545,18 @@ export class Get extends Uninstantable {
 				window.require,
 			].filter(Boolean).forEach(o => {
 				if (sandbox.Marshal.hasRule(o)) return;
-				sandbox.Marshal.setRule(o, rule)
+				sandbox.Marshal.setRule(o, rule);
 			});
 			this.#sandboxRuleSet = true;
 		}
+	}
+
+	static createSandbox(initScope = null) {
+		get.#ensureSandboxRules();
 
 		const box = new sandbox.Sandbox(initScope);
 		box.initBuiltins();
+		box.document = document; // 向沙盒提供顶级运行域的文档对象
 		Object.assign(box.scope, {
 			lib, game, get, ui, ai, _status,
 		});
