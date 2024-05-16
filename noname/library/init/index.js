@@ -145,6 +145,7 @@ export class LibInit extends Uninstantable {
 					typeof lib.message.server[message[0]] !== 'function') {
 					throw ('err');
 				}
+				// IC97 Patched
 				get.enterSandbox(client.sandbox);
 				try {
 					for (var i = 1; i < message.length; i++) {

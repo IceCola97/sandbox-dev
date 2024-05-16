@@ -1297,11 +1297,13 @@ export class Game extends Uninstantable {
 			game.ws = new WebSocket(str + ip + '');
 		}
 		// 今天狂神龙尊来了这里也没有参数
+		// 拷打狂神！！！（把狂神喵放进沙盒里面拷打然后销毁证据喵）
 		catch {
 			alert('错误：无效联机地址');
 			if (callback) callback(false);
 			return;
 		}
+		// IC97 Patched
 		game.sandbox = get.createSandbox();
 		game.ws.onopen = lib.element.ws.onopen;
 		game.ws.onmessage = lib.element.ws.onmessage;

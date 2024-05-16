@@ -1379,6 +1379,7 @@ export class Get extends Uninstantable {
 	static playersInfoOL(players) { return Array.from(players || []).map(get.playerInfoOL); }
 	static infoPlayersOL(infos) { return Array.from(infos || []).map(get.infoPlayerOL); }
 	static funcInfoOL(func) {
+		// IC97 Patched
 		if (typeof func == 'function') {
 			if (func._filter_args) {
 				return '_noname_func:' + JSON.stringify(get.stringifiedResult(func._filter_args, 3));
@@ -1398,6 +1399,7 @@ export class Get extends Uninstantable {
 		return '';
 	}
 	static infoFuncOL(info) {
+		// IC97 Patched
 		console.log("[infoFuncOL] info =", info);
 		let func;
 		const str = info.slice(13).trim();
@@ -1495,6 +1497,7 @@ export class Get extends Uninstantable {
 		}
 	}
 
+	// IC97 Patched
 	static #sandboxStack = [];
 	static #sandboxRuleSet = false;
 

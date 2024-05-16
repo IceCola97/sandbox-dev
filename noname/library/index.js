@@ -9547,6 +9547,7 @@ export class Library extends Uninstantable {
 						typeof lib.message.client[message[0]] !== 'function') {
 						throw ('err');
 					}
+					// IC97 Patched
 					if (!game.sandbox) game.sandbox = get.createSandbox();
 					get.enterSandbox(game.sandbox);
 					try {
@@ -9594,6 +9595,7 @@ export class Library extends Uninstantable {
 				}
 				game.online = false;
 				game.ws = null;
+				// IC97 Patched
 				game.sandbox = null;
 			}
 		},

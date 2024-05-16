@@ -19,6 +19,7 @@ export class Client {
 		// @ts-ignore
 		this.id = ws.wsid || get.id();
 		this.closed = false;
+		// IC97 Patched
 		this.sandbox = get.createSandbox();
 	}
 	send() {
