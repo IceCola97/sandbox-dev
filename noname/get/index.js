@@ -11,6 +11,7 @@ import { CacheContext } from "../library/cache/cacheContext.js";
 import { Sandbox, Domain, AccessAction, Rule, Marshal } from "../util/sandbox.js";
 
 import { Is } from "./is.js";
+import { isPromise } from "util/types";
 
 export class Get extends Uninstantable {
 	static is = Is;
@@ -1558,16 +1559,21 @@ export class Get extends Uninstantable {
 				Marshal.setRule(o, rule);
 			});
 
+			function isPrimitive(obj) {
+				return Object(obj) !== obj;
+			}
+
 			const defaultEval = window.eval;
-			window.eval = (...args) => {
+			window.eval = (x) => {
 				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
-				return defaultEval(...args);
+				if (!isPrimitive(item) && !Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
+				return defaultEval(x);
 			};
 
 			const defaultLibInitParsex = lib.init.parsex;
 			lib.init.parsex = (item, scope) => {
 				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
-				if (!Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
+				if (!isPrimitive(item) && !Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
 				return defaultLibInitParsex(item, scope);
 			};
 
