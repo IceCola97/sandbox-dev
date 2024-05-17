@@ -301,7 +301,6 @@ const GLOBAL_PATHES = Object.freeze([
     "/SyntaxError",
     "/RangeError",
     "/EvalError",
-    "/EvalError",
     "/ReferenceError",
     "/JSON",
     "/Map",
