@@ -96,6 +96,10 @@ class Rule {
     #accessControl = null;
 
     /**
+     * ```plain
+     * 创建一个封送规则
+     * ```
+     * 
      * @param {Rule} rule 
      */
     constructor(rule = null) {
@@ -905,6 +909,14 @@ class Domain {
     #domainRoot = null;
     #marshalledCached = new WeakMap();
 
+    /**
+     * ```plain
+     * 创建运行域
+     * 
+     * 一般不直接使用，
+     * 请考虑使用直接创建沙盒
+     * ```
+     */
     constructor() {
         let global = window;
 
@@ -1397,7 +1409,11 @@ if (window.top === window) {
         value() {
             const iframe = document.createElement("iframe");
             document.body.appendChild(iframe);
+
             const window = iframe.contentWindow;
+            if (!window)
+                throw new ReferenceError("顶级域已经被卸载");
+
             iframe.remove();
             return window;
         },
@@ -1416,6 +1432,14 @@ if (window.top === window) {
 
     Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
     iframe.remove();
+
+    ({
+        AccessAction,
+        Rule,
+        Marshal,
+        Domain,
+        Sandbox,
+    } = SANDBOX_EXPORT);
 } else {
     // 防止被不信任代码更改
     sealClass(Object);
@@ -1435,4 +1459,10 @@ if (window.top === window) {
         Object.assign({}, SANDBOX_EXPORT);
 }
 
-export default SANDBOX_EXPORT;
+export {
+    AccessAction,
+    Rule,
+    Marshal,
+    Domain,
+    Sandbox,
+};

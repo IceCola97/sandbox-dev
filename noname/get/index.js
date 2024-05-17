@@ -6,7 +6,9 @@ import { status as _status } from '../status/index.js';
 import { UI as ui } from '../ui/index.js';
 import { GNC as gnc } from '../gnc/index.js';
 import { CacheContext } from "../library/cache/cacheContext.js";
-import sandbox from "../util/sandbox.js";
+
+// IC97 Patched
+import { Sandbox, Domain, AccessAction, Rule, Marshal } from "../util/sandbox.js";
 
 import { Is } from "./is.js";
 
@@ -1502,7 +1504,6 @@ export class Get extends Uninstantable {
 	static #sandboxRuleSet = false;
 
 	/**
-	 * @typedef {sandbox.Sandbox} Sandbox
 	 * @param {Sandbox} box 
 	 */
 	static enterSandbox(box) {
@@ -1515,20 +1516,19 @@ export class Get extends Uninstantable {
 	}
 
 	/**
-	 * @typedef {sandbox.Sandbox} Sandbox
 	 * @type {Sandbox} 
 	 */
 	static get currentSandbox() {
-		if (sandbox.Domain.current !== sandbox.Domain.topDomain) throw "无法在沙盒里面访问";
+		if (Domain.current !== Domain.topDomain) throw "无法在沙盒里面访问";
 		return this.#sandboxStack[this.#sandboxStack.length - 1];
 	}
 
 	static #ensureSandboxRules(){
 		if (!this.#sandboxRuleSet) {
-			const rule = new sandbox.Rule();
+			const rule = new Rule();
 			rule.canMarshal = false; // 禁止获取函数
-			rule.setGranted(sandbox.AccessAction.CALL, false); // 禁止函数调用
-			rule.setGranted(sandbox.AccessAction.NEW, false); // 禁止函数new调用
+			rule.setGranted(AccessAction.CALL, false); // 禁止函数调用
+			rule.setGranted(AccessAction.NEW, false); // 禁止函数new调用
 
 			// 不允许被远程代码访问的对象
 			[
@@ -1548,13 +1548,14 @@ export class Get extends Uninstantable {
 				game.multiDownload2,
 				game.multiDownload,
 				game.fetch,
+				game.promises,
 				get.enterSandbox,
 				get.exitSandbox,
 				get.createSandbox,
 				window.require,
 			].filter(Boolean).forEach(o => {
-				if (sandbox.Marshal.hasRule(o)) return;
-				sandbox.Marshal.setRule(o, rule);
+				if (Marshal.hasRule(o)) return;
+				Marshal.setRule(o, rule);
 			});
 			this.#sandboxRuleSet = true;
 		}
@@ -1563,7 +1564,7 @@ export class Get extends Uninstantable {
 	static createSandbox(initScope = null) {
 		get.#ensureSandboxRules();
 
-		const box = new sandbox.Sandbox(initScope);
+		const box = new Sandbox(initScope);
 		box.initBuiltins();
 		box.document = document; // 向沙盒提供顶级运行域的文档对象
 		Object.assign(box.scope, {
