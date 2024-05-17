@@ -917,7 +917,7 @@ class Domain {
      * ```
      */
     constructor() {
-        let global = window;
+        let global = window.replacedGlobal || window;
 
         if (Domain.#currentDomain) {
             if (!createRealm)
@@ -999,12 +999,44 @@ class Domain {
         Domain.#currentDomain = Domain.#domainStack.pop();
     }
 
+    /**
+     * ```plain
+     * 获取当前运行域
+     * ```
+     * 
+     * @type {Domain}
+     */
     static get current() {
         return Domain.#currentDomain;
     }
 
+    /**
+     * ```plain
+     * 获取顶级运行域
+     * ```
+     * 
+     * @type {Domain}
+     */
     static get topDomain() {
         return Domain.#topDomain;
+    }
+
+    /**
+     * ```plain
+     * 检查当前的调用是否来自可信的运行域
+     * 
+     * 如果检查顶级运行域，则要求没有进行任何其他运行域的陷入
+     * 如果检查非顶级运行域，则要求只有顶级运行域与给定运行域的陷入
+     * ```
+     * 
+     * @param {Domain} domain 
+     */
+    static isBelievable(domain) {
+        if (domain === Domain.#topDomain)
+            return !Domain.#domainStack.length;
+
+        return Domain.#domainStack.concat([Domain.#currentDomain])
+            .every(d => d === Domain.#topDomain || d === domain);
     }
 
     /**
@@ -1418,6 +1450,8 @@ if (window.top === window) {
         },
     });
 
+    iframe.replacedGlobal = window;
+
     const script = iframe.contentDocument.createElement("script");
     script.src = FILE_URL;
     script.type = "module";
@@ -1429,6 +1463,7 @@ if (window.top === window) {
     iframe.contentDocument.head.appendChild(script);
     await promise;
 
+    delete iframe.replacedGlobal;
     Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
     iframe.remove();
 

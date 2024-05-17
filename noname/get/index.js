@@ -1501,7 +1501,7 @@ export class Get extends Uninstantable {
 
 	// IC97 Patched
 	static #sandboxStack = [];
-	static #sandboxRuleSet = false;
+	static #sandboxInit = false;
 
 	/**
 	 * @param {Sandbox} box 
@@ -1519,12 +1519,12 @@ export class Get extends Uninstantable {
 	 * @type {Sandbox} 
 	 */
 	static get currentSandbox() {
-		if (Domain.current !== Domain.topDomain) throw "无法在沙盒里面访问";
+		if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
 		return this.#sandboxStack[this.#sandboxStack.length - 1];
 	}
 
-	static #ensureSandboxRules(){
-		if (!this.#sandboxRuleSet) {
+	static #ensureSandbox() {
+		if (!this.#sandboxInit) {
 			const rule = new Rule();
 			rule.canMarshal = false; // 禁止获取函数
 			rule.setGranted(AccessAction.CALL, false); // 禁止函数调用
@@ -1557,19 +1557,35 @@ export class Get extends Uninstantable {
 				if (Marshal.hasRule(o)) return;
 				Marshal.setRule(o, rule);
 			});
-			this.#sandboxRuleSet = true;
+
+			const defaultEval = window.eval;
+			window.eval = (...args) => {
+				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
+				return defaultEval(...args);
+			};
+
+			const defaultLibInitParsex = lib.init.parsex;
+			lib.init.parsex = (item, scope) => {
+				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
+				if (!Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
+				return defaultLibInitParsex(item, scope);
+			};
+
+			this.#sandboxInit = true;
 		}
 	}
 
 	static createSandbox(initScope = null) {
-		get.#ensureSandboxRules();
+		get.#ensureSandbox();
 
 		const box = new Sandbox(initScope);
 		box.initBuiltins();
 		box.document = document; // 向沙盒提供顶级运行域的文档对象
+
 		Object.assign(box.scope, {
 			lib, game, get, ui, ai, _status,
 		});
+
 		box.pushScope();
 		return box;
 	}
