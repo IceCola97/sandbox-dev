@@ -1701,14 +1701,6 @@ class Sandbox {
             enumerable: false,
             configurable: false,
         });
-
-        Reflect.defineProperty(this.#scope, "window", {
-            get: (function () {
-                return this;
-            }).bind(this.#scope),
-            enumerable: false,
-            configurable: false,
-        });
     }
 
     /**
@@ -1836,10 +1828,11 @@ class Sandbox {
         let baseScope = initScope || thiz.#scope;
         thiz.#scope = new thiz.#domainObject();
 
-        Reflect.defineProperty(thiz.#scope, "window", {
-            value: thiz.#scope,
-            writable: false,
-            enumerable: true,
+        Reflect.defineProperty(this.#scope, "window", {
+            get: (function () {
+                return this;
+            }).bind(this.#scope),
+            enumerable: false,
             configurable: false,
         });
 
