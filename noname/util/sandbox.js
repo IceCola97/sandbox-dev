@@ -639,7 +639,7 @@ class Monitor {
      * @param {Object<string, any>} nameds 
      * @param {Object<string, Set>?} checkInfo 
      */
-    static #check(nameds, checkInfo) {
+    static #check = function (nameds, checkInfo) {
         for (const [key, value] of Object.entries(nameds)) {
             if (key in checkInfo) {
                 if (!checkInfo[key].has(value))
@@ -650,7 +650,7 @@ class Monitor {
         return true;
     }
 
-    static #dispatch(action, args) {
+    static #dispatch = function (action, args) {
         const nameds = {};
         let indexMap;
 
@@ -794,7 +794,7 @@ class Marshal {
         throw new TypeError("Marshal 类无法被构造");
     }
 
-    static #shouldMarshal(obj) {
+    static #shouldMarshal = function (obj) {
         if (obj === Marshal
             || obj === Rule
             || obj === AccessAction
@@ -807,7 +807,7 @@ class Marshal {
         return true;
     }
 
-    static #strictMarshal(obj) {
+    static #strictMarshal = function (obj) {
         return obj instanceof Sandbox;
     }
 
@@ -824,7 +824,7 @@ class Marshal {
      * @param {any} proxy 
      * @returns {Reverted}
      */
-    static #revertProxy(proxy) {
+    static #revertProxy = function (proxy) {
         return [
             proxy[Marshal.#sourceDomain],
             proxy[Marshal.#revertTarget],
@@ -840,7 +840,7 @@ class Marshal {
      * @param {Domain} domain 
      * @returns {Object?} 
      */
-    static #cacheProxy(obj, domain) {
+    static #cacheProxy = function (obj, domain) {
         return domain[SandboxExposer]
             (SandboxSignal_GetMarshalledProxy, obj);
     }
@@ -853,7 +853,7 @@ class Marshal {
      * @param {Object} obj 
      * @returns {{rule: Rule}} 
      */
-    static #ensureRuleRef(obj) {
+    static #ensureRuleRef = function (obj) {
         let rule = Marshal.#marshalRules.get(obj);
 
         if (!rule)
@@ -914,7 +914,7 @@ class Marshal {
      * @param {Domain} domain 
      * @param {() => any} action 
      */
-    static #trapDomain(domain, action) {
+    static #trapDomain = function (domain, action) {
         const prevDomain = Domain.current;
 
         // 如果可能，应该尽量避免陷入相同运行域
@@ -941,7 +941,7 @@ class Marshal {
      * @param {Domain} targetDomain 
      * @returns {Array} 
      */
-    static #marshalArray(array, targetDomain) {
+    static #marshalArray = function (array, targetDomain) {
         if (!Marshal.isMarshalled(array)
             && targetDomain.isFrom(array))
             return array;
@@ -964,7 +964,7 @@ class Marshal {
      * @param {Domain} targetDomain 
      * @returns {Object} 
      */
-    static #marshalObject(object, targetDomain) {
+    static #marshalObject = function (object, targetDomain) {
         if (!Marshal.isMarshalled(object)
             && targetDomain.isFrom(object))
             return object;
@@ -983,7 +983,7 @@ class Marshal {
      * @param {Domain} targetDomain 
      * @returns {Object} 
      */
-    static #marshal(obj, targetDomain) {
+    static #marshal = function (obj, targetDomain) {
         // 基元封送
         if (isPrimitive(obj))
             return obj;
@@ -1327,7 +1327,7 @@ class Marshal {
         return proxy;
     }
 
-    static #notifyMonitor(action, args, targetDomain) {
+    static #notifyMonitor = function (action, args, targetDomain) {
         return Monitor[SandboxExposer2]
             (SandboxSignal_DiapatchMonitor, action, args);
     }
@@ -1447,12 +1447,12 @@ class Domain {
             .call(this.#domainError, error);
     }
 
-    static #enterDomain(domain) {
+    static #enterDomain = function (domain) {
         Domain.#domainStack.push(Domain.#currentDomain);
         Domain.#currentDomain = domain;
     }
 
-    static #exitDomain() {
+    static #exitDomain = function () {
         if (Domain.#domainStack.length < 1)
             throw new ReferenceError("无法弹出更多的运行域");
 
@@ -1571,7 +1571,7 @@ class Sandbox {
         if (isPrimitive(initScope))
             initScope = null;
 
-        this.#createScope(initScope);
+        Sandbox.#createScope(this, initScope);
     }
 
     /**
@@ -1719,7 +1719,7 @@ class Sandbox {
      */
     pushScope() {
         this.#scopeStack.push(this.#scope);
-        this.#createScope();
+        Sandbox.#createScope(this);
     }
 
     /**
@@ -1832,12 +1832,12 @@ class Sandbox {
         return this.compile(code, context)();
     }
 
-    #createScope(initScope = null) {
-        let baseScope = initScope || this.#scope;
-        this.#scope = new this.#domainObject();
+    static #createScope = function (thiz, initScope = null) {
+        let baseScope = initScope || thiz.#scope;
+        thiz.#scope = new thiz.#domainObject();
 
-        Reflect.defineProperty(this.#scope, "window", {
-            value: this.#scope,
+        Reflect.defineProperty(thiz.#scope, "window", {
+            value: thiz.#scope,
             writable: false,
             enumerable: true,
             configurable: false,
@@ -1847,16 +1847,16 @@ class Sandbox {
             return;
 
         baseScope = Marshal[SandboxExposer2]
-            (SandboxSignal_Marshal, baseScope, this.#domain);
+            (SandboxSignal_Marshal, baseScope, thiz.#domain);
 
-        Marshal[SandboxExposer2](SandboxSignal_TrapDomain, this.#domain, () => {
+        Marshal[SandboxExposer2](SandboxSignal_TrapDomain, thiz.#domain, () => {
             const descriptors = Object.getOwnPropertyDescriptors(baseScope);
             delete descriptors.window;
-            Object.defineProperties(this.#scope, descriptors);
+            Object.defineProperties(thiz.#scope, descriptors);
         });
     }
 
-    static #makeName(prefix, conflict) {
+    static #makeName = function (prefix, conflict) {
         let builtName;
 
         do {
