@@ -1381,14 +1381,19 @@ export class Get extends Uninstantable {
 	static playersInfoOL(players) { return Array.from(players || []).map(get.playerInfoOL); }
 	static infoPlayersOL(infos) { return Array.from(infos || []).map(get.infoPlayerOL); }
 	// IC97 Patched
-	static #pureFunctionStr(str) {
-		if (str.startsWith("function")) str = str.slice(8);
-		const arglistHead = str.indexOf("(");
-		const arglistTail = str.indexOf(")", arglistHead + 1);
-		const arglist = str.slice(arglistHead + 1, arglistTail);
-		str = str.slice(arglistTail + 1).trim();
-		if (str.startsWith("=>")) str = `(${arglist})=>${str.slice(2)}`;
-		else str = `function(${arglist}){${str}}`;
+	static #arrowPattern = /^(?:([\w$]+)|\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\))\s*=>/;
+	static #fullPattern = /^([\w\s*]+)\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\)\s*\{/;
+	static pureFunctionStr(str) {
+		str = str.trim();
+		if (get.#arrowPattern.test(str)) return str;
+		const fullMatch = get.#fullPattern.exec(str);
+		if(!fullMatch) return '()=>console.warn("无法识别的远程代码")';
+		const head = fullMatch[1];
+		const args = fullMatch[2] || '';
+		str = `(${args}){${str.slice(fullMatch[0].length)}`;
+		if(head.includes("*")) str = "*" + str;
+		str = "function" + str;
+		if(/\basync\b/.test(head)) str = "async " + str;
 		return str;
 	}
 	static funcInfoOL(func) {
@@ -1400,8 +1405,7 @@ export class Get extends Uninstantable {
 			let str = func.toString().trim();
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return '_noname_func:function () {}';
-			str = get.#pureFunctionStr(str);
-			return '_noname_func:' + str;
+			return '_noname_func:' + get.pureFunctionStr(str);
 		}
 		return '';
 	}
@@ -1409,15 +1413,14 @@ export class Get extends Uninstantable {
 		// IC97 Patched
 		console.log("[infoFuncOL] info =", info);
 		let func;
-		const str = get.#pureFunctionStr(info.slice(13).trim());
+		const str = get.pureFunctionStr(info.slice(13));
+		console.log("[infoFuncOL] pured =", str);
 		try {
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return function () { };
-			const loadStr = `func = (${str});`;
+			const loadStr = `return (${str});`;
 			const box = this.currentSandbox;
-			const context = { func: null };
-			box.exec(loadStr, context);
-			func = context.func;
+			func = box.exec(loadStr);
 		} catch (e) {
 			console.error(`${e} in \n${str}`);
 			return function () { };

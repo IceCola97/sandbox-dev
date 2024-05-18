@@ -1695,7 +1695,7 @@ class Sandbox {
         }
 
         Reflect.defineProperty(this.#scope, "document", {
-            get: (() => {
+            get: (function () {
                 return this;
             }).bind(this.#domainDocument),
             enumerable: false,
@@ -1703,7 +1703,7 @@ class Sandbox {
         });
 
         Reflect.defineProperty(this.#scope, "window", {
-            get: (() => {
+            get: (function () {
                 return this;
             }).bind(this.#scope),
             enumerable: false,
