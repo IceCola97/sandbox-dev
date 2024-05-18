@@ -1933,6 +1933,7 @@ if (window.top === window) {
     ({
         AccessAction,
         Rule,
+        Monitor,
         Marshal,
         Domain,
         Sandbox,
