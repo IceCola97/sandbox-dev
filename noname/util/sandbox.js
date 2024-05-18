@@ -1913,7 +1913,7 @@ if (window.top === window) {
         },
     });
 
-    iframe.replacedGlobal = window;
+    iframe.contentWindow.replacedGlobal = window;
 
     const script = iframe.contentDocument.createElement("script");
     script.src = FILE_URL;
@@ -1926,7 +1926,7 @@ if (window.top === window) {
     iframe.contentDocument.head.appendChild(script);
     await promise;
 
-    delete iframe.replacedGlobal;
+    delete iframe.contentWindow.replacedGlobal;
     Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
     iframe.remove();
 
