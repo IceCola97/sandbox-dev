@@ -592,6 +592,8 @@ export class LibInit extends Uninstantable {
 	 * @returns 
 	 */
 	static parsex(item, scope) {
+		// IC97 Patched
+		get.assertSafeObject(item);
 		//by 诗笺、Tipx-L
 		/**
 		 * @param {Function} func 
@@ -691,6 +693,8 @@ export class LibInit extends Uninstantable {
 				}
 				else {
 					if (Symbol.iterator in item) return lib.init.parsex(Array.from(item));
+					// IC97 Patched
+					get.assertSafeObject(item, "toString");
 					if (item.toString !== Object.prototype.toString) return lib.init.parsex(item.toString());
 					if ("render" in item) {
 						// TODO: Object Render Parse

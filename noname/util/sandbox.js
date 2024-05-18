@@ -12,6 +12,7 @@ const SandboxSignal_ExitDomain = Symbol("ExitDomain");
 const SandboxSignal_UnpackProxy = Symbol("UnpackProxy");
 const SandboxSignal_Marshal = Symbol("Marshal");
 const SandboxSignal_TrapDomain = Symbol("TrapDomain");
+const SandboxSignal_DiapatchMonitor = Symbol("DiapatchMonitor");
 
 function isPrimitive(obj) {
     return Object(obj) !== obj;
@@ -357,12 +358,12 @@ class Globals {
      * @param {Domain} domain 
      */
     static ensureDomainGlobals(domain) {
-        if (!this.#globals.has(domain)) {
+        if (!Globals.#globals.has(domain)) {
             const window = domain[SandboxExposer](SandboxSignal_GetWindow);
             const globals = [new WeakMap(), {}];
 
             for (const path of GLOBAL_PATHES) {
-                const [key, obj] = this.parseFrom(path, window);
+                const [key, obj] = Globals.parseFrom(path, window);
 
                 if (obj == null)
                     continue;
@@ -371,7 +372,7 @@ class Globals {
                 globals[1][key] = obj;
             }
 
-            this.#globals.set(domain, globals);
+            Globals.#globals.set(domain, globals);
         }
     }
 
@@ -380,8 +381,8 @@ class Globals {
      * @param {Object} obj 
      */
     static findGlobalKey(domain, obj) {
-        this.ensureDomainGlobals(domain);
-        const globals = this.#globals.get(domain);
+        Globals.ensureDomainGlobals(domain);
+        const globals = Globals.#globals.get(domain);
         return globals[0].get(obj);
     }
 
@@ -390,8 +391,8 @@ class Globals {
      * @param {string} key 
      */
     static findGlobalObject(domain, key) {
-        this.ensureDomainGlobals(domain);
-        const globals = this.#globals.get(domain);
+        Globals.ensureDomainGlobals(domain);
+        const globals = Globals.#globals.get(domain);
         return globals[1][key];
     }
 
@@ -401,12 +402,380 @@ class Globals {
      * @param {Domain} targetDomain 
      */
     static mapTo(obj, sourceDomain, targetDomain) {
-        const key = this.findGlobalKey(sourceDomain, obj);
+        const key = Globals.findGlobalKey(sourceDomain, obj);
 
         if (!key)
             return undefined;
 
-        return this.findGlobalObject(targetDomain, key);
+        return Globals.findGlobalObject(targetDomain, key);
+    }
+}
+
+/**
+ * ```plain
+ * 提供封送对象的行为监控
+ * ```
+ */
+class Monitor {
+    /** @type {Object<number, Set<Monitor>>} */
+    static #actionMonitors = {};
+    /** @type {Set<Monitor>} */
+    static #monitorSet = new Set();
+
+    /** @type {Set<number>} */
+    #actions = new Set();
+    /** @type {Object<string, Set>} */
+    #checkInfo = {};
+    /** @type {Function?} */
+    #filter = null;
+    /** @type {Function?} */
+    #handler = null;
+
+    /**
+     * ```plain
+     * 指定 Monitor 监听的访问动作
+     * ```
+     * 
+     * @param  {...number} action 
+     * @returns {this} 
+     */
+    action(...action) {
+        if (this.isStarted)
+            throw new Error("Monitor 在启动期间不能修改");
+        if (action.length == 0
+            || !action.every(AccessAction.isAccessAction))
+            throw new TypeError("无效的访问动作");
+
+        for (const item of action)
+            this.#actions.add(item);
+
+        return this;
+    }
+
+    /**
+     * ```plain
+     * 指定 Monitor 监听的命名参数
+     * 
+     * 命名参数可能如下:
+     * target: 监听的对象，访问动作：所有
+     * thisArg: 调用的this对象，访问动作：CALL
+     * arguments: 调用的参数，访问动作：CALL, NEW
+     * newTarget: 构造的new.target，访问动作：NEW
+     * property: 访问的属性，访问动作：DEFINE, DELETE, DESCRIBE, EXISTS, READ, WRITE
+     * descriptor: 定义的属性描述符，访问动作：DEFINE
+     * receiver: 设置或读取的this对象，访问动作：READ, WRITE
+     * prototype: 定义的原型，访问动作：META
+     * ```
+     * 
+     * @typedef {"target" | "thisArg" | "arguments" | "newTarget" | "property" | "descriptor" | "receiver" | "prototype"} PropertyKey
+     * 
+     * @param {PropertyKey} name 命名参数名称
+     * @param  {...any} values 命名参数可能的值
+     * @returns {this} 
+     */
+    require(name, ...values) {
+        if (this.isStarted)
+            throw new Error("Monitor 在启动期间不能修改");
+        if (typeof name != "string")
+            throw new TypeError("无效的检查名称");
+        if (!values.length)
+            return;
+
+        let info = this.#checkInfo[name];
+
+        if (!info)
+            info = this.#checkInfo[name] = new Set();
+
+        for (const value of values)
+            info.add(value);
+
+        return this;
+    }
+
+    /**
+     * ```plain
+     * 指定 Monitor 监听的过滤器
+     * 
+     * 回调参数 nameds 是一个对象，包含了 Monitor 监听的命名参数
+     * ```
+     *
+     * @typedef {{
+     *    target: Object,
+    *     thisArg?: Object,
+    *     arguments?: Array<any>,
+    *     newTarget?: Function,
+    *     property?: string | symbol,
+    *     descriptor?: {
+    *         value?: any,
+    *         writable?: boolean,
+    *         get?: () => any,
+    *         set?: (any) => void,
+    *         enumerable: boolean,
+    *         configurable: boolean,
+    *     },
+    *     receiver?: Object,
+    *     prototype?: Object,
+    * }} Nameds
+    * 
+     * @param {(nameds: Nameds) => boolean} filter 要指定的过滤器
+     * @returns {this} 
+     */
+    filter(filter) {
+        if (this.isStarted)
+            throw new Error("Monitor 在启动期间不能修改");
+        if (typeof filter != "function")
+            throw new TypeError("无效的过滤器");
+
+        this.#filter = filter;
+        return this;
+    }
+
+    /**
+     * ```plain
+     * 指定 Monitor 监听的回调函数
+     * 
+     * 回调参数 nameds 是一个对象，包含了 Monitor 监听的命名参数
+     * 回调参数 control 是一个对象，提供本次监听的控制函数
+     * control.preventDefault(value) 阻止默认的行为，并将设定的返回值作为本次代理访问的返回值
+     * control.stopPropagation() 阻断后续的监听器，但不会阻止默认行为
+     * control.overrideParameter(name, value) 覆盖本次监听的命名参数
+     * control.setReturnValue(value) 设置本次代理访问的返回值，可以覆盖之前监听器设置的返回值
+     * ```
+     * 
+     * @typedef {{
+     *    target: Object,
+    *     thisArg?: Object,
+    *     arguments?: Array<any>,
+    *     newTarget?: Function,
+    *     property?: string | symbol,
+    *     descriptor?: {
+    *         value?: any,
+    *         writable?: boolean,
+    *         get?: () => any,
+    *         set?: (any) => void,
+    *         enumerable: boolean,
+    *         configurable: boolean,
+    *     },
+    *     receiver?: Object,
+    *     prototype?: Object,
+    * }} Nameds
+    * 
+     * @typedef {{
+     *     preventDefault: () => void,
+     *     stopPropagation: () => void,
+     *     overrideParameter: (name: string, value: any) => void,
+     *     setReturnValue: (value: any) => void,
+     * }} Control
+     * 
+     * @param {(nameds: Nameds, control: Control) => boolean} handler 
+     * @returns {this} 
+     */
+    then(handler) {
+        if (this.isStarted)
+            throw new Error("Monitor 在启动期间不能修改");
+        if (typeof handler != "function")
+            throw new TypeError("无效的回调");
+
+        this.#handler = handler;
+        return this;
+    }
+
+    /**
+     * ```plain
+     * 判断 Monitor 是否已经启动
+     * ```
+     * 
+     * @type {boolean}
+     */
+    get isStarted() {
+        return Monitor.#monitorSet.has(this);
+    }
+
+    /**
+     * ```plain
+     * 启动 Monitor
+     * ```
+     */
+    start() {
+        if (this.isStarted)
+            throw new Error("Monitor 已经启动");
+        if (typeof this.#handler != "function")
+            throw new Error("Monitor 未指定回调函数");
+
+        Monitor.#monitorSet.add(this);
+
+        for (const action of this.#actions) {
+            let monitorMap = Monitor.#actionMonitors[action];
+
+            if (!monitorMap)
+                monitorMap = Monitor.#actionMonitors[action] = new Set();
+
+            monitorMap.add(this);
+        }
+    }
+
+    /**
+     * ```plain
+     * 停止 Monitor
+     * ```
+     */
+    stop() {
+        if (!this.isStarted)
+            throw new Error("Monitor 还未启动");
+
+        Monitor.#monitorSet.delete(this);
+
+        for (const action of this.#actions) {
+            let monitorMap = Monitor.#actionMonitors[action];
+
+            if (!monitorMap)
+                continue;
+
+            monitorMap.delete(this);
+        }
+    }
+
+    /**
+     * @param {Object<string, any>} nameds 
+     * @param {Object<string, Set>?} checkInfo 
+     */
+    static #check(nameds, checkInfo) {
+        for (const [key, value] of Object.entries(nameds)) {
+            if (key in checkInfo) {
+                if (!checkInfo[key].has(value))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    static #dispatch(action, args) {
+        const nameds = {};
+        let indexMap;
+
+        switch (action) {
+            case AccessAction.CALL:
+                indexMap = {
+                    target: 0,
+                    thisArg: 1,
+                    arguments: 2,
+                };
+                break;
+            case AccessAction.NEW:
+                indexMap = {
+                    target: 0,
+                    arguments: 1,
+                    newTarget: 2,
+                };
+                break;
+            case AccessAction.DEFINE:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    descriptor: 2,
+                };
+                break;
+            case AccessAction.DELETE:
+            case AccessAction.DESCRIBE:
+            case AccessAction.EXISTS:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                };
+                break;
+            case AccessAction.READ:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    receiver: 2,
+                };
+                break;
+            case AccessAction.TRACE:
+            case AccessAction.LIST:
+            case AccessAction.SEAL:
+                indexMap = {
+                    target: 0,
+                };
+                break;
+            case AccessAction.WRITE:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    value: 2,
+                    receiver: 3,
+                };
+                break;
+            case AccessAction.META:
+                indexMap = {
+                    target: 0,
+                    prototype: 1,
+                };
+                break;
+            default:
+                throw new TypeError("不支持的访问操作");
+        }
+
+        for (const key in indexMap)
+            nameds[key] = args[indexMap[key]];
+
+        Object.freeze(indexMap);
+        Object.freeze(nameds);
+
+        const monitorMap = Monitor.#actionMonitors[action];
+
+        if (!monitorMap || monitorMap.size == 0)
+            return;
+
+        const result = {
+            preventDefault: false,
+            stopPropagation: false,
+            returnValueSet: false,
+            returnValue: undefined,
+        };
+
+        const control = Object.freeze({
+            preventDefault() {
+                result.preventDefault = true;
+            },
+            stopPropagation() {
+                result.stopPropagation = true;
+            },
+            overrideParameter(name, value) {
+                if (!(name in indexMap))
+                    throw new TypeError(`参数 ${name} 没有找到`);
+
+                args[indexMap[name]] = value;
+            },
+            setReturnValue(value) {
+                result.returnValueSet = true;
+                result.returnValue = value;
+            },
+        });
+
+        for (const monitor of monitorMap) {
+            if (!Monitor.#check(nameds, monitor.#checkInfo))
+                continue;
+
+            const filter = monitor.#filter;
+            if (typeof filter === 'function' && !filter(nameds))
+                continue;
+
+            monitor.#handler(nameds, control);
+        }
+
+        return result;
+    }
+
+    /**
+     * @param {Symbol} signal 
+     * @param  {...any} args 
+     */
+    static [SandboxExposer2](signal, ...args) {
+        switch (signal) {
+            case SandboxSignal_DiapatchMonitor:
+                return Monitor.#dispatch(...args);
+        }
     }
 }
 
@@ -452,13 +821,14 @@ class Marshal {
      *     Domain,
      *     Object,
      * ]} Reverted
+     * 
      * @param {any} proxy 
      * @returns {Reverted}
      */
     static #revertProxy(proxy) {
         return [
-            proxy[this.#sourceDomain],
-            proxy[this.#revertTarget],
+            proxy[Marshal.#sourceDomain],
+            proxy[Marshal.#revertTarget],
         ];
     }
 
@@ -485,10 +855,10 @@ class Marshal {
      * @returns {{rule: Rule}} 
      */
     static #ensureRuleRef(obj) {
-        let rule = this.#marshalRules.get(obj);
+        let rule = Marshal.#marshalRules.get(obj);
 
         if (!rule)
-            this.#marshalRules.set(obj, rule = { rule: null });
+            Marshal.#marshalRules.set(obj, rule = { rule: null });
 
         return rule;
     }
@@ -502,7 +872,7 @@ class Marshal {
      * @returns {boolean} 
      */
     static hasRule(obj) {
-        return this.#marshalRules.has(obj);
+        return Marshal.#marshalRules.has(obj);
     }
 
     /**
@@ -514,10 +884,10 @@ class Marshal {
      * @param {Rule} rule 
      */
     static setRule(obj, rule) {
-        if (this.#marshalledProxies.has(obj))
+        if (Marshal.#marshalledProxies.has(obj))
             throw new ReferenceError("无法为封送对象设置封送规则");
 
-        const ref = this.#ensureRuleRef(obj);
+        const ref = Marshal.#ensureRuleRef(obj);
 
         if (ref.rule)
             throw new ReferenceError("对象的封送规则已经被设置");
@@ -534,7 +904,7 @@ class Marshal {
      * @returns {boolean} 
      */
     static isMarshalled(obj) {
-        return this.#marshalledProxies.has(obj);
+        return Marshal.#marshalledProxies.has(obj);
     }
 
     /**
@@ -570,18 +940,43 @@ class Marshal {
      * 
      * @param {Array} array 
      * @param {Domain} targetDomain 
+     * @returns {Array} 
      */
     static #marshalArray(array, targetDomain) {
-        if (targetDomain.isFrom(array))
+        if (!Marshal.isMarshalled(array)
+            && targetDomain.isFrom(array))
             return array;
 
         const window = targetDomain[SandboxExposer](SandboxSignal_GetWindow);
         const newArray = new window.Array(array.length);
 
         for (let i = 0; i < newArray.length; i++)
-            newArray[i] = this.#marshal(array[i], targetDomain);
+            newArray[i] = Marshal.#marshal(array[i], targetDomain);
 
         return newArray;
+    }
+
+    /**
+     * ```plain
+     * 封送对象
+     * ```
+     * 
+     * @param {Object} object 
+     * @param {Domain} targetDomain 
+     * @returns {Object} 
+     */
+    static #marshalObject(object, targetDomain) {
+        if (!Marshal.isMarshalled(object)
+            && targetDomain.isFrom(object))
+            return object;
+
+        const window = targetDomain[SandboxExposer](SandboxSignal_GetWindow);
+        const newObject = new window.Object();
+
+        for (const key of Reflect.ownKeys(object))
+            newObject[key] = Marshal.#marshal(object[key], targetDomain);
+
+        return newObject;
     }
 
     /**
@@ -596,8 +991,8 @@ class Marshal {
 
         // 尝试拆除代理
         let [sourceDomain, target] =
-            this.#marshalledProxies.has(obj)
-                ? this.#revertProxy(obj)
+            Marshal.#marshalledProxies.has(obj)
+                ? Marshal.#revertProxy(obj)
                 : [Domain.current, obj];
 
         // target: 确保拆除了封送代理的对象
@@ -607,9 +1002,9 @@ class Marshal {
         if (sourceDomain === targetDomain)
             return target;
 
-        if (this.#strictMarshal(target))
+        if (Marshal.#strictMarshal(target))
             throw new TypeError("对象无法封送");
-        if (!this.#shouldMarshal(target))
+        if (!Marshal.#shouldMarshal(target))
             return target;
 
         // 异步封送
@@ -643,14 +1038,14 @@ class Marshal {
         }
 
         // 检查封送权限
-        const ruleRef = this.#ensureRuleRef(target);
+        const ruleRef = Marshal.#ensureRuleRef(target);
         const rule = ruleRef.rule;
 
         if (rule && !rule.canMarshalTo(targetDomain))
             throw new TypeError("无法将对象封送到目标运行域");
 
         // 检查封送缓存
-        const cached = this.#cacheProxy(target, targetDomain);
+        const cached = Marshal.#cacheProxy(target, targetDomain);
 
         if (cached)
             return cached;
@@ -668,7 +1063,13 @@ class Marshal {
                         target, marshalledThis, marshalledArgs))
                         throw new ReferenceError("Access denied");
 
-                    const result = Reflect.apply(target, marshalledThis, marshalledArgs);
+                    const args = [target, marshalledThis, marshalledArgs];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.CALL, args);
+
+                    if (dispatched.returnValueSet)
+                        return Marshal.#marshal(dispatched.returnValue, targetDomain);
+
+                    const result = Reflect.apply(...args);
                     return Marshal.#marshal(result, targetDomain);
                 });
             },
@@ -683,7 +1084,13 @@ class Marshal {
                         target, argArray, newTarget))
                         throw new ReferenceError("Access denied");
 
-                    const result = Reflect.construct(target, marshalledArgs, marshalledNewTarget);
+                    const args = [target, marshalledArgs, marshalledNewTarget];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.NEW, args);
+
+                    if (dispatched.returnValueSet)
+                        return Marshal.#marshal(dispatched.returnValue, targetDomain);
+
+                    const result = Reflect.construct(...args);
                     return Marshal.#marshal(result, targetDomain);
                 });
             },
@@ -720,7 +1127,13 @@ class Marshal {
                         target, property, descriptor))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.defineProperty(target, property, descriptor);
+                    const args = [target, property, descriptor];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.DEFINE, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.defineProperty(...args);
                 };
 
                 if (isSourceDomain)
@@ -735,7 +1148,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.DELETE, target, p))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.deleteProperty(target, p);
+                    const args = [target, p];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.DELETE, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.deleteProperty(...args);
                 });
             },
             get(target, p, receiver) {
@@ -754,7 +1173,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.READ, target, p, receiver))
                         throw new ReferenceError("Access denied");
 
-                    const result = Reflect.get(target, p, marshalledReceiver);
+                    const args = [target, p, marshalledReceiver];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.READ, args);
+
+                    if (dispatched.returnValueSet)
+                        return Marshal.#marshal(dispatched.returnValue, targetDomain);
+
+                    const result = Reflect.get(...args);
                     return Marshal.#marshal(result, targetDomain);
                 });
             },
@@ -766,25 +1191,20 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.DESCRIBE, target, p))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.getOwnPropertyDescriptor(target, p);
+                    const args = [target, p];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.DESCRIBE, args);
+
+                    if (dispatched.returnValueSet)
+                        return dispatched.returnValue;
+
+                    return Reflect.getOwnPropertyDescriptor(...args);
                 };
 
                 if (isSourceDomain)
                     return domainTrapAction();
 
                 const descriptor = Marshal.#trapDomain(sourceDomain, domainTrapAction);
-
-                if (descriptor == null)
-                    return undefined;
-
-                const window = targetDomain[SandboxExposer](SandboxSignal_GetWindow);
-                const result = new window.Object();
-
-                for (const key in descriptor) {
-                    result[key] = Marshal.#marshal(descriptor[key], targetDomain);
-                }
-
-                return result;
+                return Marshal.#marshalObject(descriptor, targetDomain);
             },
             getPrototypeOf(target) {
                 return Marshal.#trapDomain(sourceDomain, () => {
@@ -793,7 +1213,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.TRACE, target))
                         throw new ReferenceError("Access denied");
 
-                    const result = Reflect.getPrototypeOf(target);
+                    const args = [target];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.TRACE, args);
+
+                    if (dispatched.returnValueSet)
+                        return Marshal.#marshal(dispatched.returnValue, targetDomain);
+
+                    const result = Reflect.getPrototypeOf(...args);
                     return Marshal.#marshal(result, targetDomain);
                 });
             },
@@ -805,7 +1231,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.EXISTS, target, p))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.has(target, p);
+                    const args = [target, p];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.EXISTS, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.has(...args);
                 };
 
                 if (isSourceDomain)
@@ -823,7 +1255,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.LIST, target))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.ownKeys(target);
+                    const args = [target];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.LIST, args);
+
+                    if (dispatched.returnValueSet)
+                        return dispatched.returnValue;
+
+                    return Reflect.ownKeys(...args);
                 });
 
                 return Marshal.#marshalArray(keys, targetDomain);
@@ -835,7 +1273,13 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.SEAL, target))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.preventExtensions(target);
+                    const args = [target];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.SEAL, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.preventExtensions(...args);
                 });
             },
             set(target, p, newValue, receiver) {
@@ -849,7 +1293,13 @@ class Marshal {
                         target, p, newValue, receiver))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.set(target, p, marshalledNewValue, marshalledReceiver);
+                    const args = [target, p, marshalledNewValue, marshalledReceiver];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.WRITE, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.set(...args);
                 });
             },
             setPrototypeOf(target, v) {
@@ -861,15 +1311,26 @@ class Marshal {
                     if (rule && !rule.canAccess(AccessAction.META, target, v))
                         throw new ReferenceError("Access denied");
 
-                    return Reflect.setPrototypeOf(target, marshalledV);
+                    const args = [target, marshalledV];
+                    const dispatched = Marshal.#notifyMonitor(AccessAction.META, args);
+
+                    if (dispatched.returnValueSet)
+                        return !!dispatched.returnValue;
+
+                    return Reflect.setPrototypeOf(...args);
                 });
             },
         });
 
-        this.#marshalledProxies.add(proxy);
+        Marshal.#marshalledProxies.add(proxy);
         targetDomain[SandboxExposer]
             (SandboxSignal_SetMarshalledProxy, target, proxy);
         return proxy;
+    }
+
+    static #notifyMonitor(action, args, targetDomain) {
+        return Monitor[SandboxExposer2]
+            (SandboxSignal_DiapatchMonitor, action, args);
     }
 
     /**
@@ -879,11 +1340,11 @@ class Marshal {
     static [SandboxExposer2](signal, ...args) {
         switch (signal) {
             case SandboxSignal_Marshal:
-                return this.#marshal(...args);
+                return Marshal.#marshal(...args);
             case SandboxSignal_UnpackProxy:
-                return this.#revertProxy(...args);
+                return Marshal.#revertProxy(...args);
             case SandboxSignal_TrapDomain:
-                return this.#trapDomain(...args);
+                return Marshal.#trapDomain(...args);
         }
     }
 }
@@ -1068,9 +1529,9 @@ class Domain {
                 Domain.#topDomain = Domain.#currentDomain;
                 return;
             case SandboxSignal_EnterDomain:
-                return this.#enterDomain(...args);
+                return Domain.#enterDomain(...args);
             case SandboxSignal_ExitDomain:
-                return this.#exitDomain();
+                return Domain.#exitDomain();
         }
     }
 }
@@ -1418,6 +1879,7 @@ function sealClass(clazz) {
 
 sealClass(AccessAction);
 sealClass(Rule);
+sealClass(Monitor);
 sealClass(Marshal);
 sealClass(Domain);
 sealClass(Sandbox);
@@ -1425,6 +1887,7 @@ sealClass(Sandbox);
 const SANDBOX_EXPORT = {
     AccessAction,
     Rule,
+    Monitor,
     Marshal,
     Domain,
     Sandbox,
@@ -1488,6 +1951,12 @@ if (window.top === window) {
     sealClass(Proxy);
     sealClass(Date);
     sealClass(Math);
+    sealClass(Error);
+    sealClass(TypeError);
+    sealClass(ReferenceError);
+    sealClass(RangeError);
+    sealClass(EvalError);
+    sealClass(SyntaxError);
 
     window.SANDBOX_EXPORT =
         Object.assign({}, SANDBOX_EXPORT);
@@ -1496,6 +1965,7 @@ if (window.top === window) {
 export {
     AccessAction,
     Rule,
+    Monitor,
     Marshal,
     Domain,
     Sandbox,
