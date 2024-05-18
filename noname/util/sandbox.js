@@ -723,16 +723,15 @@ class Monitor {
         Object.freeze(nameds);
 
         const monitorMap = Monitor.#actionMonitors[action];
-
-        if (!monitorMap || monitorMap.size == 0)
-            return;
-
         const result = {
             preventDefault: false,
             stopPropagation: false,
             returnValueSet: false,
             returnValue: undefined,
         };
+
+        if (!monitorMap || monitorMap.size == 0)
+            return result;
 
         const control = Object.freeze({
             preventDefault() {

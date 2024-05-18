@@ -1380,6 +1380,17 @@ export class Get extends Uninstantable {
 	static infoPlayerOL(info) { return lib.playerOL ? (lib.playerOL[info.slice(15)] || info) : info; }
 	static playersInfoOL(players) { return Array.from(players || []).map(get.playerInfoOL); }
 	static infoPlayersOL(infos) { return Array.from(infos || []).map(get.infoPlayerOL); }
+	// IC97 Patched
+	static #pureFunctionStr(str) {
+		if (str.startsWith("function")) str = str.slice(8);
+		const arglistHead = str.indexOf("(");
+		const arglistTail = str.indexOf(")", arglistHead + 1);
+		const arglist = str.slice(arglistHead + 1, arglistTail);
+		str = str.slice(arglistTail + 1).trim();
+		if (str.startsWith("=>")) str = `(${arglist})=>${str.slice(2)}`;
+		else str = `function(${arglist}){${str}}`;
+		return str;
+	}
 	static funcInfoOL(func) {
 		// IC97 Patched
 		if (typeof func == 'function') {
@@ -1389,13 +1400,7 @@ export class Get extends Uninstantable {
 			let str = func.toString().trim();
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return '_noname_func:function () {}';
-			if (str.startsWith("function")) str = str.slice(8);
-			const arglistHead = str.indexOf("(");
-			const arglistTail = str.indexOf(")", arglistHead + 1);
-			const arglist = str.slice(arglistHead + 1, arglistTail);
-			str = str.slice(arglistTail + 1).trim();
-			if (str.startsWith("=>")) str = `(${arglist})=>${str.slice(2)}`;
-			else str = `function(${arglist}){${str}}`;
+			str = get.#pureFunctionStr(str);
 			return '_noname_func:' + str;
 		}
 		return '';
@@ -1404,7 +1409,7 @@ export class Get extends Uninstantable {
 		// IC97 Patched
 		console.log("[infoFuncOL] info =", info);
 		let func;
-		const str = info.slice(13).trim();
+		const str = get.#pureFunctionStr(info.slice(13).trim());
 		try {
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return function () { };
