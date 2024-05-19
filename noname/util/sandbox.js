@@ -15,6 +15,8 @@ const SandboxSignal_Marshal = Symbol("Marshal");
 const SandboxSignal_TrapDomain = Symbol("TrapDomain");
 const SandboxSignal_DiapatchMonitor = Symbol("DiapatchMonitor");
 const SandboxSignal_NewDomain = Symbol("NewDomain");
+const SandboxSignal_ListMonitor = Symbol("ListMonitor");
+const SandboxSignal_ExposeInfo = Symbol("ExposeInfo");
 
 function isPrimitive(obj) {
     return Object(obj) !== obj;
@@ -415,6 +417,325 @@ class Globals {
 
 /**
  * ```plain
+ * 管理每个运行域对于其封送对象的 Monitor
+ * 
+ * 非暴露类
+ * ```
+ */
+class DomainMonitors {
+    /** @type {WeakMap<Domain, DomainMonitors>} */
+    static #domainMonitors = new WeakMap();
+
+    /** @type {WeakMap<Domain, Object<number, Set<Monitor>>>} */
+    #monitorsMap = new WeakMap();
+
+    /**
+     * @param {DomainMonitors} thiz 
+     * @param {Monitor} monitor 
+     */
+    static #installMonitor = function (thiz, monitor) {
+        const [
+            actions,
+            allowDomains,
+            disallowDomains,
+        ] = Monitor[SandboxExposer2]
+                (SandboxSignal_ExposeInfo, monitor);
+
+        function addToActionMap(actionMap) {
+            for (const action of actions) {
+                let monitorMap = actionMap[action];
+
+                if (!monitorMap)
+                    monitorMap = actionMap[action] = new Set();
+
+                monitorMap.add(monitor);
+            }
+        }
+
+        const domainList = [];
+
+        if (!allowDomains) {
+            const totalDomains = new Set(Domain[SandboxExposer2]
+                (SandboxSignal_ListDomain));
+            totalDomains.remove(monitor.domain);
+
+            if (disallowDomains)
+                for (const domain of disallowDomains)
+                    totalDomains.delete(domain);
+
+            domainList.push(...totalDomains);
+        } else
+            domainList.push(...allowDomains);
+
+        for (const domain of domainList) {
+            let actionMap = thiz.#monitorsMap.get(domain);
+
+            if (!actionMap)
+                thiz.#monitorsMap.set(domain, actionMap = {});
+
+            addToActionMap(actionMap);
+        }
+    }
+
+    /**
+     * @param {DomainMonitors} thiz 
+     * @param {Monitor} monitor 
+     */
+    static #uninstallMonitor = function (thiz, monitor) {
+        const [
+            actions,
+            allowDomains,
+            disallowDomains,
+        ] = Monitor[SandboxExposer2]
+                (SandboxSignal_ExposeInfo, monitor);
+
+        function removeFromActionMap(actionMap) {
+            for (const action of actions) {
+                const monitorMap = actionMap[action];
+
+                if (!monitorMap)
+                    continue;
+
+                monitorMap.delete(monitor);
+            }
+        }
+
+        const domainList = [];
+
+        if (!allowDomains) {
+            const totalDomains = new Set(Domain[SandboxExposer2]
+                (SandboxSignal_ListDomain));
+
+            if (disallowDomains)
+                for (const domain of disallowDomains)
+                    totalDomains.delete(domain);
+
+            domainList.push(...totalDomains);
+        } else
+            domainList.push(...allowDomains);
+
+        for (const domain of domainList) {
+            const actionMap = thiz.#monitorsMap.get(domain);
+
+            if (!actionMap)
+                continue;
+
+            removeFromActionMap(actionMap);
+        }
+    }
+
+    /**
+     * @param {Domain} sourceDomain 
+     * @param {Domain} targetDomain 
+     * @param {number} action 
+     * @returns {Set<Monitor>?} 
+     */
+    static #getMonitorsBy = function (sourceDomain, targetDomain, action) {
+        const instance = DomainMonitors.#domainMonitors.get(sourceDomain);
+
+        if (!instance)
+            return null;
+
+        const actionMap = instance.#monitorsMap.get(targetDomain);
+
+        if (!actionMap || !(action in actionMap))
+            return null;
+
+        return actionMap[action];
+    }
+
+    /**
+     * @param {DomainMonitors} thiz 
+     * @param {Domain} domain 
+     */
+    static #handleNewDomain = function (thiz, domain) {
+        let actionMap = thiz.#monitorsMap.get(domain);
+
+        for (const monitor of
+            Monitor[SandboxExposer2](SandboxSignal_ListMonitor)) {
+            if (monitor.domain === domain)
+                continue;
+
+            const [
+                actions,
+                allowDomains,
+                disallowDomains,
+            ] = Monitor[SandboxExposer2]
+                    (SandboxSignal_ExposeInfo, monitor);
+
+            if (allowDomains
+                && !allowDomains.has(domain))
+                continue;
+            if (disallowDomains
+                && disallowDomains.has(domain))
+                continue;
+
+            if (!actionMap)
+                thiz.#monitorsMap.set(domain, actionMap = {});
+
+            for (const action of actions) {
+                let monitors = actionMap[action];
+
+                if (!monitors)
+                    monitors = actionMap[action] = new Set();
+
+                monitors.add(monitor);
+            }
+        }
+    }
+
+    static handleNewDomain(newDomain) {
+        const totalDomains = new Set(Domain[SandboxExposer2]
+            (SandboxSignal_ListDomain));
+
+        for (const domain of totalDomains) {
+            const instance = DomainMonitors.#domainMonitors.get(domain);
+
+            if (!instance)
+                continue;
+
+            DomainMonitors.#handleNewDomain(instance, newDomain);
+        }
+    }
+
+    static dispatch(sourceDomain, targetDomain, action, args) {
+        const nameds = {};
+        let indexMap;
+
+        switch (action) {
+            case AccessAction.CALL:
+                indexMap = {
+                    target: 0,
+                    thisArg: 1,
+                    arguments: 2,
+                };
+                break;
+            case AccessAction.NEW:
+                indexMap = {
+                    target: 0,
+                    arguments: 1,
+                    newTarget: 2,
+                };
+                break;
+            case AccessAction.DEFINE:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    descriptor: 2,
+                };
+                break;
+            case AccessAction.DELETE:
+            case AccessAction.DESCRIBE:
+            case AccessAction.EXISTS:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                };
+                break;
+            case AccessAction.READ:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    receiver: 2,
+                };
+                break;
+            case AccessAction.TRACE:
+            case AccessAction.LIST:
+            case AccessAction.SEAL:
+                indexMap = {
+                    target: 0,
+                };
+                break;
+            case AccessAction.WRITE:
+                indexMap = {
+                    target: 0,
+                    property: 1,
+                    value: 2,
+                    receiver: 3,
+                };
+                break;
+            case AccessAction.META:
+                indexMap = {
+                    target: 0,
+                    prototype: 1,
+                };
+                break;
+            default:
+                throw new TypeError("不支持的访问操作");
+        }
+
+        for (const key in indexMap)
+            nameds[key] = args[indexMap[key]];
+
+        Object.freeze(indexMap);
+        Object.freeze(nameds);
+
+        const monitorMap = DomainMonitors.#getMonitorsBy(sourceDomain, targetDomain, action);
+        const result = {
+            preventDefault: false,
+            stopPropagation: false,
+            returnValueSet: false,
+            returnValue: undefined,
+        };
+
+        if (!monitorMap || monitorMap.size == 0)
+            return result;
+
+        const control = Object.freeze({
+            preventDefault() {
+                result.preventDefault = true;
+            },
+            stopPropagation() {
+                result.stopPropagation = true;
+            },
+            overrideParameter(name, value) {
+                if (!(name in indexMap))
+                    throw new TypeError(`参数 ${name} 没有找到`);
+
+                args[indexMap[name]] = value;
+            },
+            setReturnValue(value) {
+                result.returnValueSet = true;
+                result.returnValue = value;
+            },
+        });
+
+        for (const monitor of monitorMap) {
+            Monitor[SandboxExposer2]
+                (SandboxSignal_DiapatchMonitor, monitor, nameds, control);
+        }
+
+        return result;
+    }
+
+    /**
+     * @param {Monitor} monitor 
+     */
+    static installMonitor(monitor) {
+        const domain = monitor.domain;
+        let instance = DomainMonitors.#domainMonitors.get(domain);
+
+        if (!instance)
+            DomainMonitors.#domainMonitors
+                .set(domain, instance = new DomainMonitors());
+
+        DomainMonitors.#installMonitor(instance, monitor);
+    }
+
+    /**
+     * @param {Monitor} monitor 
+     */
+    static uninstallMonitor(monitor) {
+        const domain = monitor.domain;
+        const instance = DomainMonitors.#domainMonitors.get(domain);
+
+        if (instance)
+            DomainMonitors.#uninstallMonitor(instance, monitor);
+    }
+}
+
+/**
+ * ```plain
  * 提供封送对象的行为监控
  * ```
  */
@@ -684,41 +1005,7 @@ class Monitor {
             throw new Error("Monitor 未指定回调函数");
 
         Monitor.#monitorSet.add(this);
-
-        function addToActionMap(actionMap) {
-            for (const action of this.#actions) {
-                let monitorMap = actionMap[action];
-
-                if (!monitorMap)
-                    monitorMap = actionMap[action] = new Set();
-
-                monitorMap.add(this);
-            }
-        }
-
-        const domainList = [];
-
-        if (!this.#allowDomains) {
-            const totalDomains = new Set(Domain[SandboxExposer2]
-                (SandboxSignal_ListDomain));
-            totalDomains.remove(this.#domain);
-
-            if (this.#disallowDomains)
-                for (const domain of this.#disallowDomains)
-                    totalDomains.delete(domain);
-
-            domainList.push(...totalDomains);
-        } else
-            domainList.push(...this.#allowDomains);
-
-        for (const domain of domainList) {
-            let actionMap = Monitor.#monitorsMap.get(domain);
-
-            if (!actionMap)
-                Monitor.#monitorsMap.set(domain, actionMap = {});
-
-            addToActionMap(actionMap);
-        }
+        DomainMonitors.installMonitor(this);
     }
 
     /**
@@ -730,87 +1017,19 @@ class Monitor {
         if (!this.isStarted)
             throw new Error("Monitor 还未启动");
 
-        function removeFromActionMap(actionMap) {
-            for (const action of this.#actions) {
-                const monitorMap = actionMap[action];
-
-                if (!monitorMap)
-                    continue;
-
-                monitorMap.delete(this);
-            }
-        }
-
-        const domainList = [];
-
-        if (!this.#allowDomains) {
-            const totalDomains = new Set(Domain[SandboxExposer2]
-                (SandboxSignal_ListDomain));
-
-            if (this.#disallowDomains)
-                for (const domain of this.#disallowDomains)
-                    totalDomains.delete(domain);
-
-            domainList.push(...totalDomains);
-        } else
-            domainList.push(...this.#allowDomains);
-
-        for (const domain of domainList) {
-            const actionMap = Monitor.#monitorsMap.get(domain);
-
-            if (!actionMap)
-                continue;
-
-            removeFromActionMap(actionMap);
-        }
-
+        DomainMonitors.uninstallMonitor(this);
         Monitor.#monitorSet.delete(this);
     }
 
-    static #onNewDomain = function (domain) {
-        let actionMap = Monitor.#monitorsMap.get(domain);
-
-        function addToActionMap(monitor) {
-            if (!actionMap)
-                Monitor.#monitorsMap.set(domain, actionMap = {});
-
-            for (const action of monitor.#actions) {
-                let monitorMap = actionMap[action];
-
-                if (!monitorMap)
-                    monitorMap = actionMap[action] = new Set();
-
-                monitorMap.add(monitor);
-            }
-        }
-
-        for (const monitor of Monitor.#monitorSet) {
-            if (monitor.#domain === domain)
-                continue;
-            if (monitor.#allowDomains
-                && !monitor.#allowDomains.has(domain))
-                continue;
-            if (monitor.#disallowDomains
-                && monitor.#disallowDomains.has(domain))
-                continue;
-
-            addToActionMap(monitor);
-        }
-    }
-
     /**
-     * @param {Domain} sourceDomain 
-     * @param {Domain} targetDomain 
-     * @param {number} action 
-     * @returns {Set<Monitor>?} 
+     * @param {Monitor} monitor 
      */
-    static #getMonitorsBy = function (targetDomain, action) {
-        const actionMap = Monitor.#monitorsMap.get(targetDomain);
-
-        if (!actionMap || !(action in actionMap))
-            return null;
-
-        return actionMap[action];
+    static #exposeInfo = function (monitor) {
+        return [
+            monitor.#actions,
+            monitor.#allowDomains,
+            monitor.#disallowDomains
+        ];
     }
 
     /**
@@ -828,120 +1047,15 @@ class Monitor {
         return true;
     }
 
-    static #dispatch = function (targetDomain, action, args) {
-        const nameds = {};
-        let indexMap;
+    static #handle = function (monitor, nameds, control) {
+        if (!Monitor.#check(nameds, monitor.#checkInfo))
+            return;
 
-        switch (action) {
-            case AccessAction.CALL:
-                indexMap = {
-                    target: 0,
-                    thisArg: 1,
-                    arguments: 2,
-                };
-                break;
-            case AccessAction.NEW:
-                indexMap = {
-                    target: 0,
-                    arguments: 1,
-                    newTarget: 2,
-                };
-                break;
-            case AccessAction.DEFINE:
-                indexMap = {
-                    target: 0,
-                    property: 1,
-                    descriptor: 2,
-                };
-                break;
-            case AccessAction.DELETE:
-            case AccessAction.DESCRIBE:
-            case AccessAction.EXISTS:
-                indexMap = {
-                    target: 0,
-                    property: 1,
-                };
-                break;
-            case AccessAction.READ:
-                indexMap = {
-                    target: 0,
-                    property: 1,
-                    receiver: 2,
-                };
-                break;
-            case AccessAction.TRACE:
-            case AccessAction.LIST:
-            case AccessAction.SEAL:
-                indexMap = {
-                    target: 0,
-                };
-                break;
-            case AccessAction.WRITE:
-                indexMap = {
-                    target: 0,
-                    property: 1,
-                    value: 2,
-                    receiver: 3,
-                };
-                break;
-            case AccessAction.META:
-                indexMap = {
-                    target: 0,
-                    prototype: 1,
-                };
-                break;
-            default:
-                throw new TypeError("不支持的访问操作");
-        }
+        const filter = monitor.#filter;
+        if (typeof filter === 'function' && !filter(nameds))
+            return;
 
-        for (const key in indexMap)
-            nameds[key] = args[indexMap[key]];
-
-        Object.freeze(indexMap);
-        Object.freeze(nameds);
-
-        const monitorMap = Monitor.#getMonitorsBy(targetDomain, action);
-        const result = {
-            preventDefault: false,
-            stopPropagation: false,
-            returnValueSet: false,
-            returnValue: undefined,
-        };
-
-        if (!monitorMap || monitorMap.size == 0)
-            return result;
-
-        const control = Object.freeze({
-            preventDefault() {
-                result.preventDefault = true;
-            },
-            stopPropagation() {
-                result.stopPropagation = true;
-            },
-            overrideParameter(name, value) {
-                if (!(name in indexMap))
-                    throw new TypeError(`参数 ${name} 没有找到`);
-
-                args[indexMap[name]] = value;
-            },
-            setReturnValue(value) {
-                result.returnValueSet = true;
-                result.returnValue = value;
-            },
-        });
-
-        for (const monitor of monitorMap) {
-            if (!Monitor.#check(nameds, monitor.#checkInfo))
-                continue;
-
-            const filter = monitor.#filter;
-            if (typeof filter === 'function' && !filter(nameds))
-                continue;
-
-            monitor.#handler(nameds, control);
-        }
-
-        return result;
+        monitor.#handler(nameds, control);
     }
 
     /**
@@ -951,9 +1065,11 @@ class Monitor {
     static [SandboxExposer2](signal, ...args) {
         switch (signal) {
             case SandboxSignal_DiapatchMonitor:
-                return Monitor.#dispatch(...args);
-            case SandboxSignal_NewDomain:
-                return Monitor.#onNewDomain(...args);
+                return Monitor.#handle(...args);
+            case SandboxSignal_ListMonitor:
+                return Monitor.#monitorSet;
+            case SandboxSignal_ExposeInfo:
+                return Monitor.#exposeInfo(...args);
         }
     }
 }
@@ -1243,8 +1359,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, marshalledThis, marshalledArgs];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.CALL, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.CALL, args);
 
                     if (dispatched.returnValueSet)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
@@ -1265,8 +1381,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, marshalledArgs, marshalledNewTarget];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.NEW, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.NEW, args);
 
                     if (dispatched.returnValueSet)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
@@ -1309,8 +1425,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, property, descriptor];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.DEFINE, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.DEFINE, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1331,8 +1447,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.DELETE, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.DELETE, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1357,8 +1473,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p, marshalledReceiver];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.READ, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.READ, args);
 
                     if (dispatched.returnValueSet)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
@@ -1376,8 +1492,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.DESCRIBE, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.DESCRIBE, args);
 
                     if (dispatched.returnValueSet)
                         return dispatched.returnValue;
@@ -1399,8 +1515,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.TRACE, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.TRACE, args);
 
                     if (dispatched.returnValueSet)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
@@ -1418,8 +1534,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.EXISTS, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.EXISTS, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1443,8 +1559,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.LIST, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.LIST, args);
 
                     if (dispatched.returnValueSet)
                         return dispatched.returnValue;
@@ -1462,8 +1578,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.SEAL, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.SEAL, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1483,8 +1599,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p, marshalledNewValue, marshalledReceiver];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.WRITE, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.WRITE, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1502,8 +1618,8 @@ class Marshal {
                         throw new ReferenceError("Access denied");
 
                     const args = [target, marshalledV];
-                    const dispatched = Marshal.#notifyMonitor(
-                        targetDomain, AccessAction.META, args);
+                    const dispatched = DomainMonitors.dispatch(
+                        sourceDomain, targetDomain, AccessAction.META, args);
 
                     if (dispatched.returnValueSet)
                         return !!dispatched.returnValue;
@@ -1517,11 +1633,6 @@ class Marshal {
         targetDomain[SandboxExposer]
             (SandboxSignal_SetMarshalledProxy, target, proxy);
         return proxy;
-    }
-
-    static #notifyMonitor = function (targetDomain, action, args) {
-        return Monitor[SandboxExposer2]
-            (SandboxSignal_DiapatchMonitor, targetDomain, action, args);
     }
 
     /**
@@ -1593,11 +1704,9 @@ class Domain {
         this.#domainObject = global.Object;
         this.#domainError = global.Error;
         this.#domainPromise = global.Promise;
-        Domain.#domainLinks.push(new WeakRef(this));
         Globals.ensureDomainGlobals(this);
-
-        Monitor[SandboxExposer2]
-            (SandboxSignal_NewDomain, this);
+        DomainMonitors.handleNewDomain(this);
+        Domain.#domainLinks.push(new WeakRef(this));
     }
 
     /**
@@ -2101,6 +2210,8 @@ function sealClass(clazz) {
 
 sealClass(AccessAction);
 sealClass(Rule);
+sealClass(Globals);
+sealClass(DomainMonitors);
 sealClass(Monitor);
 sealClass(Marshal);
 sealClass(Domain);
