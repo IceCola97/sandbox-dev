@@ -674,7 +674,6 @@ class DomainMonitors {
         const result = {
             preventDefault: false,
             stopPropagation: false,
-            returnValueSet: false,
             returnValue: undefined,
         };
 
@@ -695,7 +694,6 @@ class DomainMonitors {
                 args[indexMap[name]] = value;
             },
             setReturnValue(value) {
-                result.returnValueSet = true;
                 result.returnValue = value;
             },
         });
@@ -703,6 +701,9 @@ class DomainMonitors {
         for (const monitor of monitorMap) {
             Monitor[SandboxExposer2]
                 (SandboxSignal_DiapatchMonitor, monitor, nameds, control);
+
+            if(result.stopPropagation)
+                break;
         }
 
         return result;
@@ -912,8 +913,8 @@ class Monitor {
     *         writable?: boolean,
     *         get?: () => any,
     *         set?: (any) => void,
-    *         enumerable: boolean,
-    *         configurable: boolean,
+    *         enumerable?: boolean,
+    *         configurable?: boolean,
     *     },
     *     receiver?: Object,
     *     prototype?: Object,
@@ -955,8 +956,8 @@ class Monitor {
     *         writable?: boolean,
     *         get?: () => any,
     *         set?: (any) => void,
-    *         enumerable: boolean,
-    *         configurable: boolean,
+    *         enumerable?: boolean,
+    *         configurable?: boolean,
     *     },
     *     receiver?: Object,
     *     prototype?: Object,
@@ -1362,7 +1363,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.CALL, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
                     const result = Reflect.apply(...args);
@@ -1384,7 +1385,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.NEW, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
                     const result = Reflect.construct(...args);
@@ -1428,7 +1429,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.DEFINE, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.defineProperty(...args);
@@ -1450,7 +1451,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.DELETE, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.deleteProperty(...args);
@@ -1476,7 +1477,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.READ, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
                     const result = Reflect.get(...args);
@@ -1495,7 +1496,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.DESCRIBE, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return dispatched.returnValue;
 
                     return Reflect.getOwnPropertyDescriptor(...args);
@@ -1518,7 +1519,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.TRACE, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
                     const result = Reflect.getPrototypeOf(...args);
@@ -1537,7 +1538,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.EXISTS, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.has(...args);
@@ -1562,7 +1563,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.LIST, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return dispatched.returnValue;
 
                     return Reflect.ownKeys(...args);
@@ -1581,7 +1582,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.SEAL, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.preventExtensions(...args);
@@ -1602,7 +1603,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.WRITE, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.set(...args);
@@ -1621,7 +1622,7 @@ class Marshal {
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.META, args);
 
-                    if (dispatched.returnValueSet)
+                    if (dispatched.preventDefault)
                         return !!dispatched.returnValue;
 
                     return Reflect.setPrototypeOf(...args);
