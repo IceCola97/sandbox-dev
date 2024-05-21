@@ -14,6 +14,9 @@ import { gnc } from '../gnc/index.js';
 import { importCardPack, importCharacterPack, importExtension, importMode } from './import.js';
 import { onload } from './onload.js';
 
+// IC97 Patched
+import security from "../util/security.js";
+
 // 判断是否从file协议切换到http/s协议
 export function canUseHttpProtocol() {
 	// 如果是http了就不用
@@ -104,6 +107,12 @@ export async function boot() {
 
 	// 加载polyfill内容
 	await import('./polyfill.js');
+
+	// IC97 Patched
+	// 初始化security
+	security.initSecurity({
+		lib, game, ui, get, ai, _status, gnc,
+	});
 
 	// 设定游戏加载时间，超过时间未加载就提醒
 	const configLoadTime = localStorage.getItem(lib.configprefix + 'loadtime');

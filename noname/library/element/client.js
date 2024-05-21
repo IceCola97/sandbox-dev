@@ -6,6 +6,9 @@ import { status as _status } from '../../status/index.js';
 import { UI as ui } from '../../ui/index.js';
 import { GNC as gnc } from '../../gnc/index.js';
 
+// IC97 Patched
+import security from "../../util/security.js";
+
 export class Client {
 	/**
 	 * @param {import('../index.js').NodeWS | InstanceType<typeof import('ws').WebSocket> | Client} ws
@@ -20,7 +23,7 @@ export class Client {
 		this.id = ws.wsid || get.id();
 		this.closed = false;
 		// IC97 Patched
-		this.sandbox = get.createSandbox();
+		this.sandbox = security.createSandbox();
 	}
 	send() {
 		if (this.closed) return this;

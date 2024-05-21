@@ -8,7 +8,7 @@ import { GNC as gnc } from '../gnc/index.js';
 import { CacheContext } from "../library/cache/cacheContext.js";
 
 // IC97 Patched
-import { Sandbox, Domain, AccessAction, Rule, Marshal, Monitor } from "../util/sandbox.js";
+import security from "../util/security.js";
 
 import { Is } from "./is.js";
 
@@ -1419,7 +1419,7 @@ export class Get extends Uninstantable {
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return function () { };
 			const loadStr = `return (${str});`;
-			const box = this.currentSandbox;
+			const box = security.currentSandbox();
 			func = box.exec(loadStr);
 		} catch (e) {
 			console.error(`${e} in \n${str}`);
@@ -1506,154 +1506,6 @@ export class Get extends Uninstantable {
 			return item;
 		}
 	}
-
-	// IC97 Patched
-	/*                    安全代码，请谨慎修改喵                    */
-	// Security Begin
-	static #sandboxStack = [];
-	static #sandboxInit = false;
-
-	/**
-	 * @param {Sandbox} box 
-	 */
-	static enterSandbox(box) {
-		this.#sandboxStack.push(box);
-	}
-
-	static exitSandbox() {
-		if (!this.#sandboxStack.length) return;
-		this.#sandboxStack.pop();
-	}
-
-	/**
-	 * @param {Object?} obj 
-	 * @param {string?} prop 
-	 */
-	static isUnsafeObject(obj, prop = null) {
-		if (prop != null) {
-			const descriptor = Object.getOwnPropertyDescriptor(obj, prop);
-			if (descriptor.get && get.isUnsafeObject(descriptor.get)) return true;
-			if (descriptor.set && get.isUnsafeObject(descriptor.set)) return true;
-			if (get.isUnsafeObject(descriptor.value)) return true;
-		}
-		if (get.isPrimitive(obj)) return false;
-		return !Domain.topDomain.isFrom(obj);
-	}
-
-	/**
-	 * 确保对象是安全对象
-	 * 
-	 * @param {Object?} obj 要检查的对象
-	 * @param {string?} prop 指定要检查的属性描述符
-	 */
-	static assertSafeObject(obj, prop = null) {
-		if (get.isUnsafeObject(obj, prop)) throw "unsafe object denied";
-	}
-
-	/**
-	 * @param {Object?} obj 
-	 */
-	static isPrimitive(obj) {
-		return Object(obj) !== obj;
-	}
-
-	/**
-	 * @type {Sandbox} 
-	 */
-	static get currentSandbox() {
-		if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
-		return this.#sandboxStack[this.#sandboxStack.length - 1];
-	}
-
-	static #ensureSandbox() {
-		if (!this.#sandboxInit) {
-			const callRule = new Rule();
-			callRule.canMarshal = false; // 禁止获取函数
-			callRule.setGranted(AccessAction.CALL, false); // 禁止函数调用
-			callRule.setGranted(AccessAction.NEW, false); // 禁止函数new调用
-
-			// 不允许被远程代码访问的对象
-			[
-				game.download,
-				game.readFile,
-				game.readFileAsText,
-				game.writeFile,
-				game.removeFile,
-				game.getFileList,
-				game.ensureDirectory,
-				game.createDir,
-				game.removeDir,
-				game.checkForUpdate,
-				game.checkForAssetUpdate,
-				game.importExtension,
-				game.export,
-				game.multiDownload2,
-				game.multiDownload,
-				game.fetch,
-				game.promises,
-				get.enterSandbox,
-				get.exitSandbox,
-				get.createSandbox,
-				get.isUnsafeObject,
-				get.isPrimitive,
-				window.require,
-			].filter(Boolean).forEach(o => {
-				if (Marshal.hasRule(o)) return;
-				Marshal.setRule(o, callRule);
-			});
-
-			const writeRule = new Rule();
-			writeRule.setGranted(AccessAction.WRITE, false); // 禁止写入属性
-			Marshal.setRule(get, writeRule);
-
-			// 监听原型、toStringTag的更改
-			const toStringTag = Symbol.toStringTag;
-			new Monitor()
-				.action(AccessAction.WRITE)
-				.action(AccessAction.DEFINE)
-				.action(AccessAction.META)
-				.require("property", toStringTag)
-				.then((nameds, control) => {
-					// 阻止原型、toStringTag的更改
-					control.preventDefault();
-					control.stopPropagation();
-					control.setReturnValue(false);
-				})
-				.start();
-
-			const defaultEval = window.eval;
-			window.eval = (x) => {
-				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
-				if (!get.isPrimitive(item) && !Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
-				return defaultEval(x);
-			};
-
-			const defaultLibInitParsex = lib.init.parsex;
-			lib.init.parsex = (item, scope) => {
-				if (!Domain.isBelievable(Domain.topDomain)) throw "无法在沙盒里面访问";
-				if (!Domain.topDomain.isFrom(item)) throw "尝试执行不安全的代码";
-				return defaultLibInitParsex(item, scope);
-			};
-
-			this.#sandboxInit = true;
-		}
-	}
-
-	static createSandbox(initScope = null) {
-		get.#ensureSandbox();
-
-		const box = new Sandbox(initScope);
-		box.initBuiltins();
-		box.document = document; // 向沙盒提供顶级运行域的文档对象
-
-		Object.assign(box.scope, {
-			lib, game, get, ui, ai, _status,
-		});
-
-		box.pushScope();
-		return box;
-	}
-	// Security End
 
 	static parsedResult(item) {
 		if (!item) return item;

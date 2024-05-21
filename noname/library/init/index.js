@@ -11,6 +11,10 @@ import { LibInitPromises } from "./promises.js"
 import { GameEvent } from "../element/gameEvent.js"
 import { GameEventPromise } from "../element/gameEventPromise.js"
 
+// IC97 Patched
+import security from "../../util/security.js";
+import { Domain, Marshal, Sandbox } from "../../util/sandbox.js";
+
 export class LibInit extends Uninstantable {
 	/**
 	 * 部分函数的Promise版本
@@ -146,13 +150,13 @@ export class LibInit extends Uninstantable {
 					throw ('err');
 				}
 				// IC97 Patched
-				get.enterSandbox(client.sandbox);
+				security.enterSandbox(client.sandbox);
 				try {
 					for (var i = 1; i < message.length; i++) {
 						message[i] = get.parsedResult(message[i]);
 					}
 				} finally {
-					get.exitSandbox(client.sandbox);
+					security.exitSandbox(client.sandbox);
 				}
 			}
 			catch (e) {
@@ -593,7 +597,30 @@ export class LibInit extends Uninstantable {
 	 */
 	static parsex(item, scope) {
 		// IC97 Patched
-		get.assertSafeObject(item);
+		let ModFunction = Function;
+		let ModGeneratorFunction = GeneratorFunction;
+		let ModAsyncFunction = AsyncFunction;
+		// let ModAsyncGeneratorFunction = AsyncGeneratorFunction;
+
+		// 虽然现在 parsex 被控制到了沙盒，
+		// 但是因为默认沙盒还是可以额外操作东西，
+		// 故而对此再进行一层包裹
+		const domain = Marshal.getMarshalledDomain(item) || Domain.caller;
+
+		if (domain && domain !== Domain.topDomain) {
+			const sandbox = Sandbox.from(domain);
+
+			if(!sandbox)
+				throw "意外的运行域: 运行域没有绑定沙盒";
+
+			[
+				ModFunction,
+				ModGeneratorFunction,
+				ModAsyncFunction,
+				// ModAsyncGeneratorFunction,
+			] = security.getIsolateds(sandbox);
+		}
+
 		//by 诗笺、Tipx-L
 		/**
 		 * @param {Function} func 
@@ -615,7 +642,7 @@ export class LibInit extends Uninstantable {
 				debuggerCopy = debuggerCopy.slice(0, debuggerSkip + debuggerResult.index) + insertDebugger + debuggerCopy.slice(debuggerSkip + debuggerResult.index + debuggerResult[0].length, -1);
 				//测试是否有错误
 				try {
-					new GeneratorFunction(debuggerCopy);
+					new ModGeneratorFunction(debuggerCopy);
 					str = debuggerCopy + '}';
 					debuggerSkip += debuggerResult.index + insertDebugger.length;
 					hasDebugger = true;
@@ -642,7 +669,7 @@ export class LibInit extends Uninstantable {
 					copy = copy.slice(0, skip + result.index) + insertStr + copy.slice(skip + result.index + result[0].length);
 					//测试是否有错误
 					try {
-						new (hasDebugger ? GeneratorFunction : Function)(copy);
+						new (hasDebugger ? ModGeneratorFunction : ModFunction)(copy);
 						str = copy;
 						skip += result.index + insertStr.length;
 					} catch (error) {
@@ -654,7 +681,7 @@ export class LibInit extends Uninstantable {
 				str = `if(event.step==${k}){event.finish();return;}` + str;
 			}
 			if (!scope) {
-				return (new (hasDebugger ? GeneratorFunction : Function)('event', 'step', 'source', 'player', 'target', 'targets',
+				return (new (hasDebugger ? ModGeneratorFunction : ModFunction)('event', 'step', 'source', 'player', 'target', 'targets',
 					'card', 'cards', 'skill', 'forced', 'num', 'trigger', 'result',
 					'_status', 'lib', 'game', 'ui', 'get', 'ai', str));
 			} else {
@@ -694,7 +721,7 @@ export class LibInit extends Uninstantable {
 				else {
 					if (Symbol.iterator in item) return lib.init.parsex(Array.from(item));
 					// IC97 Patched
-					get.assertSafeObject(item, "toString");
+					security.assertSafeObject(item, "toString");
 					if (item.toString !== Object.prototype.toString) return lib.init.parsex(item.toString());
 					if ("render" in item) {
 						// TODO: Object Render Parse

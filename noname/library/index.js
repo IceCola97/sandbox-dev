@@ -24,6 +24,8 @@ import { Experimental } from "./experimental/index.js";
 import * as Element from "./element/index.js";
 import { updateURLs } from "./update-urls.js";
 
+// IC97 Patched
+import security from "../util/security.js";
 
 export class Library extends Uninstantable {
 	static configprefix = 'noname_0.9_';
@@ -9548,14 +9550,14 @@ export class Library extends Uninstantable {
 						throw ('err');
 					}
 					// IC97 Patched
-					if (!game.sandbox) game.sandbox = get.createSandbox();
-					get.enterSandbox(game.sandbox);
+					if (!game.sandbox) game.sandbox = security.createSandbox();
+					security.enterSandbox(game.sandbox);
 					try {
 						for (var i = 1; i < message.length; i++) {
 							message[i] = get.parsedResult(message[i]);
 						}
 					} finally {
-						get.exitSandbox();
+						security.exitSandbox();
 					}
 				}
 				catch (e) {

@@ -21,6 +21,9 @@ import { userAgent, Uninstantable, GeneratorFunction, AsyncFunction, delay, nona
 import { DynamicStyle } from "./dynamic-style/index.js";
 import { GamePromises } from "./promises.js";
 
+// IC97 Patched
+import security from "../util/security.js";
+
 export class Game extends Uninstantable {
 	static online = false;
 	static onlineID = null;
@@ -1304,7 +1307,7 @@ export class Game extends Uninstantable {
 			return;
 		}
 		// IC97 Patched
-		game.sandbox = get.createSandbox();
+		game.sandbox = security.createSandbox();
 		game.ws.onopen = lib.element.ws.onopen;
 		game.ws.onmessage = lib.element.ws.onmessage;
 		game.ws.onerror = lib.element.ws.onerror;
