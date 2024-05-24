@@ -465,8 +465,8 @@ export class Player extends HTMLDivElement {
 				if (errVars.includes(key)) throw new Error(`Variable '${key}' should not be referenced by vars objects`);
 				varstr += `var ${key}=lib.skill['${skillName}'].vars['${key}'];\n`;
 			}
+			// IC97 Patched
 			let str = `
-					function content(){
 						${varstr}if(event.triggername=='${skillName}After'){
 							player.removeSkill('${skillName}');
 							delete lib.skill['${skillName}'];
@@ -482,7 +482,10 @@ export class Player extends HTMLDivElement {
 				const str2 = a.slice(begin, a.lastIndexOf("}") != -1 ? a.lastIndexOf("}") : undefined).trim();
 				str += `'step ${i}'\n\t${str2}\n\t`;
 			}
-			skill.content = lib.init.parsex((scope || eval)(str + `\n};content;`), scope);
+			// IC97 Patched
+			// 防止注入喵
+			new Function(`function content(){${str}}`);
+			skill.content = lib.init.parsex((scope || eval)(`function content(){\n${str}\n};content;`), scope);
 			// @ts-ignore
 			skill.content._parsed = true;
 		};

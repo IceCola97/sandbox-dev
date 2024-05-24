@@ -5363,6 +5363,9 @@ export class Game extends Uninstantable {
 				newvid.name1 = newvid.name2.slice(10, newvid.name1.lastIndexOf('_'));
 			}
 			lib.videos.unshift(newvid);
+			// IC97 Patched
+			// 通过克隆保存包含代理的数据
+			newvid.video = structuredClone(newvid.video);
 			store.put(newvid);
 			ui.create.videoNode(newvid, true);
 		}
@@ -8263,7 +8266,9 @@ export class Game extends Uninstantable {
 			next = new Set();
 		}
 
-		return [...finals];
+		skills.length = 0;
+		skills.push(...finals);
+		return skills;
 
 		return skills.addArray(skills.reduce((previousValue, currentValue) => {
 			const info = get.info(currentValue);

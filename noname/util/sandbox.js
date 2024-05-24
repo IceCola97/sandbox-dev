@@ -1,5 +1,8 @@
 const FILE_URL = import.meta.url;
 
+// 方便开关确定沙盒的问题喵
+const SANDBOX_ENABLED = true;
+
 // 暴露方法Symbol
 const SandboxExposer = Symbol("Sandbox.Exposer"); // 实例暴露
 const SandboxExposer2 = Symbol("Sandbox.Exposer2"); // 静态暴露
@@ -9,6 +12,7 @@ const SandboxSignal_InitDomain = Symbol("InitDomain");
 const SandboxSignal_GetMarshalledProxy = Symbol("GetMarshalledProxy");
 const SandboxSignal_SetMarshalledProxy = Symbol("SetMarshalledProxy");
 const SandboxSignal_GetWindow = Symbol("GetWindow");
+const SandboxSignal_GetPromise = Symbol("GetPromise");
 const SandboxSignal_IsArray = Symbol("IsArray");
 const SandboxSignal_EnterDomain = Symbol("EnterDomain");
 const SandboxSignal_ExitDomain = Symbol("ExitDomain");
@@ -303,8 +307,6 @@ class Rule {
 const GLOBAL_PATHES = Object.freeze([
     "/Object",
     "/Array",
-    // 危险对象不传递
-    // "/Function",
     "/Promise",
     "/Date",
     "/String",
@@ -348,10 +350,6 @@ const GLOBAL_PATHES = Object.freeze([
     "/WeakSet/prototype",
     ["/Generator", "(function*(){})().constructor"],
     ["/AsyncGenerator", "(async function*(){})().constructor"],
-    // 危险对象不传递
-    // ["/GeneratorFunction", "(function*(){}).constructor"],
-    // ["/AsyncFunction", "(async()=>{}).constructor"],
-    // ["/AsyncGeneratorFunction", "(async function*(){}).constructor"],
     ["/Generator/prototype", "(function*(){})().constructor.prototype"],
     ["/AsyncGenerator/prototype", "(async function*(){})().constructor.prototype"],
     ["/GeneratorFunction/prototype", "(function*(){}).constructor.prototype"],
@@ -361,14 +359,6 @@ const GLOBAL_PATHES = Object.freeze([
     "/Proxy",
     "/Math",
     "/Reflect",
-    "/setTimeout",
-    "/setInterval",
-    "/setImmediate",
-    "/clearTimeout",
-    "/clearInterval",
-    "/clearImmediate",
-    // 危险对象不传递
-    // "/eval",
     "/parseInt",
     "/parseFloat",
     "/isNaN",
@@ -376,6 +366,32 @@ const GLOBAL_PATHES = Object.freeze([
     "/alert",
     "/confirm",
     "/console",
+
+    // 危险对象不传递
+    // "/Function",
+    // ["/GeneratorFunction", "(function*(){}).constructor"],
+    // ["/AsyncFunction", "(async()=>{}).constructor"],
+    // ["/AsyncGeneratorFunction", "(async function*(){}).constructor"],
+    // "/eval",
+]);
+
+/**
+ * ```plain
+ * 初始化内建对象时就需要封送的全局变量
+ * ```
+ */
+const MARSHALLED_LIST = Object.freeze([
+    "/setTimeout",
+    "/clearTimeout",
+    "/setInterval",
+    "/clearInterval",
+    "/setImmediate",
+    "/clearImmediate",
+    "/requestAnimationFrame",
+    "/cancelAnimationFrame",
+    "/requestIdleCallback",
+    "/cancelIdleCallback",
+    "/queueMicrotask",
 ]);
 
 /**
@@ -386,6 +402,8 @@ const GLOBAL_PATHES = Object.freeze([
  * ```
  */
 class Globals {
+    /** @type {[WeakMap, Object, Object]} */
+    static #topGlobals = null;
     /** @type {WeakMap<Domain, [WeakMap, Object]>} */
     static #globals = new WeakMap();
 
@@ -404,11 +422,33 @@ class Globals {
             let obj = window;
 
             for (const item of items)
-                obj = obj[item];
+                if (!(obj = obj[item]))
+                    break;
 
             return [path, obj];
         } else
             return [path[0], window.eval(path[1])];
+    }
+
+    /**
+     * ```plain
+     * 解析映射路径为索引
+     * ```
+     *
+     * @param {string} path 
+     * @param {Window} window 
+     * @returns {[Object, string]} [索引对象, 索引键名]
+     */
+    static parseIndex(path, window) {
+        const items = path.split("/").filter(Boolean);
+        const last = items.pop();
+        let obj = window;
+
+        for (const item of items)
+            if (!(obj = obj[item]))
+                break;
+
+        return [obj, last];
     }
 
     /**
@@ -422,6 +462,27 @@ class Globals {
         if (!Globals.#globals.has(domain)) {
             const window = domain[SandboxExposer](SandboxSignal_GetWindow);
             const globals = [new WeakMap(), {}];
+
+            if (Globals.#topGlobals) {
+                const marshalleds = Globals.#topGlobals[2];
+
+                for (const path of MARSHALLED_LIST) {
+                    const [obj, key] = Globals.parseIndex(path, window);
+                    obj[key] = trapMarshal(Domain.topDomain, domain, marshalleds[path]);
+                }
+            } else {
+                Globals.#topGlobals = globals;
+                globals.push({});
+
+                for (const path of MARSHALLED_LIST) {
+                    const [key, obj] = Globals.parseFrom(path, window);
+
+                    if (obj == null)
+                        continue;
+
+                    globals[2][key] = obj;
+                }
+            }
 
             for (const path of GLOBAL_PATHES) {
                 const [key, obj] = Globals.parseFrom(path, window);
@@ -483,6 +544,372 @@ class Globals {
         return Globals.findGlobalObject(targetDomain, key);
     }
 }
+
+/**
+ * ```plain
+ * 需要封装传递ExecuteContext的函数
+ * 
+ * 根据HTML现有函数设置
+ * 请不要改动下面的列表
+ * ```
+ */
+const wrappingFunctions = [
+    "/setTimeout",
+    "/setInterval",
+    "/setImmediate",
+    "/requestAnimationFrame",
+    "/requestIdleCallback",
+    "/queueMicrotask",
+    "/EventTarget/prototype/addEventListener",
+    "/EventTarget/prototype/removeEventListener",
+    [/^HTML\w*?Element$/, "prototype", /^on[a-z0-9]+$/, "*"],
+    ["IDBRequest", "prototype", /^on[a-z0-9]+$/, "*"],
+    ["XMLHttpRequestEventTarget", "prototype", /^on[a-z0-9]+$/, "*"],
+    "/MutationObserver",
+
+    // "/HTMLCanvasElement/prototype/toBlob",
+    // "/DataTransferItem/prototype/getAsString",
+    // "/LaunchQueue/prototype/setConsumer",
+    // "/ResizeObserver",
+    // "/ReportingObserver",
+    // "/PerformanceObserver",
+    // "/IntersectionObserver",
+];
+
+// 不支持的：
+// customElements / CustomElementRegistry, 太抽象了喵，太多东西了喵，太麻烦了喵，太复杂了喵（用这个的要被狠狠的打皮鼓喵！
+
+/**
+ * ```plain
+ * 对于原生函数进行封装
+ * 
+ * 非暴露类
+ * ```
+ */
+class NativeWrapper {
+    static #unboxedFunction = Symbol("NativeWrapper.unboxedFunction");
+
+    /** @type {WeakMap<Proxy<Function>, Function>} */
+    static #boxedMap = new WeakMap();
+    /** @type {WeakSet<Function>} */
+    static #boxedSet = new WeakSet();
+
+    /** @type {typeof Function} */
+    static #topFunction = null;
+
+    /**
+     * ```plain
+     * 初始化顶级运行域的Function
+     * ```
+     * 
+     * @param {Window} topGlobal 
+     */
+    static initTopDomain(topGlobal) {
+        if (NativeWrapper.#topFunction)
+            throw new Error("NativeWrapper 已经初始化过了");
+
+        NativeWrapper.#topFunction = topGlobal.Function;
+    }
+
+    /**
+     * ```plain
+     * 对某个域的原生函数进行封装
+     * ```
+     * 
+     * @param {Window} global 
+     */
+    static wrapInDomains(global) {
+        for (const selector of wrappingFunctions)
+            NativeWrapper.wrapFunctions(global, selector);
+    }
+
+    /**
+     * ```plain
+     * 根据选择器对原生函数进行封装
+     * ```
+     * 
+     * @param {Window} global 
+     * @param {string|Array<string|symbol|RegExp>} selector 
+     */
+    static wrapFunctions(global, selector, topGlobal) {
+        const items = Array.isArray(selector)
+            ? selector : selector.split("/").filter(Boolean);
+
+        let flags = 2; // 默认装箱了喵
+
+        if (items[items.length - 1] === "*") {
+            flags |= 1;
+            items.pop();
+        }
+
+        items.unshift(global);
+
+        const pathes = [items];
+        const indexes = [];
+
+        while (pathes.length) {
+            const path = pathes.shift();
+
+            if (path.length == 2) {
+                if (!(path[1] instanceof RegExp)) {
+                    if (path[1] in path[0])
+                        indexes.push(path);
+
+                    continue;
+                }
+
+                const root = path[0];
+                const pattern = path[1];
+                indexes.push(...Reflect.ownKeys(root)
+                    .filter(k => pattern.test(
+                        typeof k == "string"
+                            ? k : `@${k.description}`))
+                    .filter(k => k in root)
+                    .map(k => [root, k]));
+
+                continue;
+            }
+
+            if (!(path[1] instanceof RegExp)) {
+                const root = path.shift();
+
+                if (path[0] === "__proto__")
+                    path[0] = Reflect.getPrototypeOf(root);
+                else
+                    path[0] = root[path[0]];
+
+                if (!path[0])
+                    continue;
+
+                pathes.push(path);
+                continue;
+            }
+
+            const root = path.shift();
+            const pattern = path.shift();
+            const keys = Reflect.ownKeys(root)
+                .filter(k => pattern.test(
+                    typeof k == "string"
+                        ? k : `@${k.description}`))
+                .filter(k => root[k]);
+
+            if (!keys.length)
+                continue;
+
+            pathes.push(...keys
+                .map(k => [root[k], ...path]));
+        }
+
+        for (const index of indexes)
+            NativeWrapper.wrapFunction(global, ...index, flags);
+    }
+
+    /**
+     * ```plain
+     * 对于具体的原生函数进行封装
+     * ```
+     * 
+     * @param {Window} global 
+     * @param {Object} parent 
+     * @param {string|symbol} name 
+     * @param {number} flags 
+     */
+    static wrapFunction(global, parent, name, flags) {
+        if (flags & 1) {
+            const descriptor = Reflect.getOwnPropertyDescriptor(parent, name);
+
+            if (typeof descriptor.get != "function"
+                || typeof descriptor.set != "function")
+                throw new TypeError("不支持的HTML实现");
+
+            descriptor.get = NativeWrapper.wrapGetter(descriptor.get);
+            descriptor.set = NativeWrapper.wrapSetter(descriptor.set);
+            Reflect.defineProperty(parent, name, descriptor);
+        } else {
+            const defaultFunction = parent[name];
+
+            if (!defaultFunction)
+                return;
+
+            if (defaultFunction.prototype) {
+                const wrappedApply = NativeWrapper.wrapApply(defaultFunction, flags);
+                const wrappedConstruct = NativeWrapper.wrapConstruct(defaultFunction, flags);
+
+                parent[name] = new Proxy(defaultFunction, {
+                    apply(target, thisArg, argArray) {
+                        return Reflect.apply(wrappedApply, thisArg, argArray);
+                    },
+                    construct(target, argArray, newTarget) {
+                        return Reflect.construct(wrappedConstruct, argArray, newTarget);
+                    },
+                });
+            } else {
+                parent[name] = NativeWrapper.wrapApply(
+                    global === parent
+                        ? defaultFunction.bind(null)
+                        : defaultFunction, flags);
+            }
+        }
+    }
+
+    /**
+     * ```plain
+     * 将原生函数进行调用封装
+     * ```
+     * 
+     * @param {Function} func 
+     * @param {number} flags 
+     * @returns {Function} 
+     */
+    static wrapApply(func, flags = 0) {
+        const wrapped = (flags & 2)
+            ? function (...args) {
+                const list = args.map(a => NativeWrapper.boxCallback(a));
+                return ContextInvoker1(func, this, list);
+            }
+            : function (...args) {
+                return ContextInvoker1(func, this, args);
+            };
+
+        sealObjectTree(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * ```plain
+     * 将原生函数进行构造封装
+     * ```
+     * 
+     * @param {Function} func 
+     * @param {number} flags 
+     * @returns {Function} 
+     */
+    static wrapConstruct(func, flags = 0) {
+        const wrapped = (flags & 2)
+            ? function (...args) {
+                const list = args.map(a => NativeWrapper.boxCallback(a));
+                return ContextInvoker2(func, list, new.target);
+            }
+            : function (...args) {
+                return ContextInvoker2(func, args, new.target);
+            };
+
+        sealObjectTree(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * ```plain
+     * 将原生GETTER进行调用封装
+     * ```
+     * 
+     * @param {Function} func 
+     * @returns {Function} 
+     */
+    static wrapGetter(func) {
+        const wrapped = function () {
+            return NativeWrapper.unboxCallback(
+                ContextInvoker1(func, this, []));
+        };
+
+        sealObjectTree(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * ```plain
+     * 将原生SETTER进行调用封装
+     * ```
+     * 
+     * @param {Function} func 
+     * @returns {Function} 
+     */
+    static wrapSetter(func) {
+        const wrapped = function (value) {
+            return ContextInvoker1(func, this,
+                [NativeWrapper.boxCallback(value)]);
+        };
+
+        sealObjectTree(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * ```plain
+     * 将回调函数进行装箱
+     * ```
+     * 
+     * @param {Function} unboxed 
+     * @returns 
+     */
+    static boxCallback(unboxed) {
+        if (typeof unboxed != "function")
+            return unboxed;
+
+        let wrapped = NativeWrapper.#boxedMap.get(unboxed);
+
+        if (!wrapped) {
+            wrapped = ContextInvokerCreator({
+                unboxed,
+            }, function (thiz, args, newTarget) {
+                return newTarget
+                    ? Reflect.construct(this.unboxed, args, newTarget)
+                    : Reflect.apply(this.unboxed, thiz, args);
+            });
+
+            wrapped[SandboxExposer] = (signal) => {
+                if (signal === NativeWrapper.#unboxedFunction)
+                    return unboxed;
+            };
+
+            Reflect.setPrototypeOf(wrapped, Function.prototype);
+            sealObjectTree(wrapped);
+            NativeWrapper.#boxedMap.set(unboxed, wrapped);
+        }
+
+        NativeWrapper.#boxedSet.add(wrapped);
+        return wrapped;
+    }
+
+    /**
+     * ```plain
+     * 将回调函数进行拆箱
+     * ```
+     * 
+     * @param {Function} boxed 
+     * @returns 
+     */
+    static unboxCallback(boxed) {
+        if (!NativeWrapper.#boxedSet.has(boxed))
+            return boxed;
+
+        return boxed[SandboxExposer]
+            (NativeWrapper.#unboxedFunction);
+    }
+}
+
+// 执行上下文传递函数，请勿动喵
+
+/** @type {(Function, Object, Array) => any} */
+const ContextInvoker1 = window.replacedCI1
+    || (function (apply, target, thiz, args) {
+        return apply(target, thiz, args);
+    }).bind(null, Reflect.apply);
+
+/** @type {(Function, Array, Function) => any} */
+const ContextInvoker2 = window.replacedCI2
+    || (function (construct, target, args, newTarget) {
+        return construct(target, args, newTarget);
+    }).bind(null, Reflect.construct);
+
+/** @type {(Object, Function) => ((...args) => any)} */
+const ContextInvokerCreator = window.replacedCIC
+    || (function (apply, closure, target) {
+        return function (...args) {
+            return apply(target, closure,
+                [this === window ? null : this, args, new.target]);
+        };
+    }).bind(null, Reflect.apply);
 
 /**
  * ```plain
@@ -783,6 +1210,11 @@ class DomainMonitors {
         if (!monitorMap || monitorMap.size == 0)
             return result;
 
+        const access = {
+            domain: targetDomain,
+            action,
+        };
+
         const control = Object.freeze({
             preventDefault() {
                 result.preventDefault = true;
@@ -803,7 +1235,7 @@ class DomainMonitors {
 
         for (const monitor of monitorMap) {
             Monitor[SandboxExposer2]
-                (SandboxSignal_DiapatchMonitor, monitor, nameds, control);
+                (SandboxSignal_DiapatchMonitor, monitor, access, nameds, control);
 
             if (result.stopPropagation)
                 break;
@@ -860,16 +1292,14 @@ class DomainMonitors {
  * monitor.action(AccessAction.WRITE); // 指定监听 Reflect.set 行为
  * monitor.require("target", dummy); // 指定监听 dummy 对象
  * monitor.require("property", "value"); // 指定监听 value 属性
- * monitor.filter((nameds) => nameds.value >= 0); // 过滤掉大于等于 0 的修改
- * monitor.then((nameds, control) => {
+ * monitor.filter((access, nameds) => nameds.value >= 0); // 过滤掉大于等于 0 的修改
+ * monitor.then((access, nameds, control) => {
  *     control.overrideParameter("value", 0); // 将要修改的新值改回 0
  * });
  * monitor.start(); // 启动Monitor
  * ```
  */
 class Monitor {
-    /** @type {WeakMap<Domain, Object<number, Set<Monitor>>>} */
-    static #monitorsMap = new WeakMap();
     /** @type {Set<Monitor>} */
     static #monitorSet = new Set();
 
@@ -1036,25 +1466,30 @@ class Monitor {
      * ```
      *
      * @typedef {{
-     *    target: Object,
-    *     thisArg?: Object,
-    *     arguments?: Array<any>,
-    *     newTarget?: Function,
-    *     property?: string | symbol,
-    *     descriptor?: {
-    *         value?: any,
-    *         writable?: boolean,
-    *         get?: () => any,
-    *         set?: (any) => void,
-    *         enumerable?: boolean,
-    *         configurable?: boolean,
-    *     },
-    *     receiver?: Object,
-    *     prototype?: Object,
-    *     value?: any,
-    * }} Nameds
-    * 
-     * @param {(nameds: Nameds) => boolean} filter 要指定的过滤器
+     *     domain: Domain,
+     *     action: number,
+     * }} Access
+     * 
+     * @typedef {{
+     *     target: Object,
+     *     thisArg?: Object,
+     *     arguments?: Array<any>,
+     *     newTarget?: Function,
+     *     property?: string | symbol,
+     *     descriptor?: {
+     *         value?: any,
+     *         writable?: boolean,
+     *         get?: () => any,
+     *         set?: (any) => void,
+     *         enumerable?: boolean,
+     *         configurable?: boolean,
+     *     },
+     *     receiver?: Object,
+     *     prototype?: Object,
+     *     value?: any,
+     * }} Nameds
+     * 
+     * @param {(access: Access, nameds: Nameds) => boolean} filter 要指定的过滤器
      * @returns {this} 
      */
     filter(filter) {
@@ -1082,7 +1517,12 @@ class Monitor {
      * @typedef {"target" | "thisArg" | "arguments" | "newTarget" | "property" | "descriptor" | "receiver" | "prototype" | "value"} PropertyKey
      * 
      * @typedef {{
-     *    target: Object,
+     *     domain: Domain,
+     *     action: number,
+     * }} Access
+     * 
+     * @typedef {{
+     *     target: Object,
      *     thisArg?: Object,
      *     arguments?: Array<any>,
      *     newTarget?: Function,
@@ -1107,7 +1547,7 @@ class Monitor {
      *     setReturnValue: (value: any) => void,
      * }} Control
      * 
-     * @param {(nameds: Nameds, control: Control) => boolean} handler 
+     * @param {(access: Access, nameds: Nameds, control: Control) => boolean} handler 
      * @returns {this} 
      */
     then(handler) {
@@ -1199,18 +1639,19 @@ class Monitor {
      * ```
      * 
      * @param {Monitor} thiz
+     * @param {Object} access
      * @param {Object<string, any>} nameds 
      * @param {Object<string, Set>?} checkInfo 
      */
-    static #handle = function (thiz, nameds, control) {
+    static #handle = function (thiz, access, nameds, control) {
         if (!Monitor.#check(nameds, thiz.#checkInfo))
             return;
 
         const filter = thiz.#filter;
-        if (typeof filter === 'function' && !filter(nameds))
+        if (typeof filter === 'function' && !filter(access, nameds))
             return;
 
-        thiz.#handler(nameds, control);
+        thiz.#handler(access, nameds, control);
     }
 
     /**
@@ -1259,7 +1700,6 @@ class Marshal {
             || obj === AccessAction
             || obj === Domain
             || obj === Sandbox
-            || obj instanceof Rule
             || obj instanceof Domain)
             return false;
 
@@ -1268,14 +1708,16 @@ class Marshal {
 
     /**
      * ```plain
-     * 判断是否可以封送
+     * 判断是否禁止封送
      * ```
      *
      * @param {any} obj 
      * @returns {boolean} 
      */
     static #strictMarshal = function (obj) {
-        return obj instanceof Sandbox;
+        return obj instanceof Sandbox
+            || obj instanceof Rule
+            || obj instanceof Monitor;
     }
 
     /**
@@ -1427,9 +1869,6 @@ class Marshal {
     static #marshalArray = function (array, targetDomain) {
         if (isPrimitive(array))
             return array;
-        if (!Marshal.isMarshalled(array)
-            && targetDomain.isFrom(array))
-            return array;
 
         const window = targetDomain[SandboxExposer](SandboxSignal_GetWindow);
         const newArray = new window.Array(array.length);
@@ -1451,9 +1890,6 @@ class Marshal {
      */
     static #marshalObject = function (object, targetDomain) {
         if (isPrimitive(object))
-            return object;
-        if (!Marshal.isMarshalled(object)
-            && targetDomain.isFrom(object))
             return object;
 
         const window = targetDomain[SandboxExposer](SandboxSignal_GetWindow);
@@ -1493,33 +1929,22 @@ class Marshal {
         if (!Marshal.#shouldMarshal(target))
             return target;
 
-        // 异步封送
-        if (sourceDomain.isPromise(target)) {
-            const marshaller = (value => {
-                return Marshal.#trapDomain(sourceDomain, () => {
-                    return Marshal.#marshal(value, targetDomain);
-                });
-            })
-            target = target.then(marshaller,
-                e => { throw marshaller(e); });
-        } else {
-            // 全局变量封送
-            const mapped = Globals.mapTo(target, sourceDomain, targetDomain);
+        // 全局变量封送
+        const mapped = Globals.mapTo(target, sourceDomain, targetDomain);
 
-            if (mapped != null)
-                return mapped;
+        if (mapped != null)
+            return mapped;
 
-            // 错误封送
-            if (sourceDomain.isError(target)) {
-                const errorCtor = target.constructor;
-                const mappedCtor = Globals.mapTo(errorCtor, sourceDomain, targetDomain);
+        // 错误封送
+        if (sourceDomain.isError(target)) {
+            const errorCtor = target.constructor;
+            const mappedCtor = Globals.mapTo(errorCtor, sourceDomain, targetDomain);
 
-                if (mappedCtor) {
-                    const newError = new mappedCtor();
-                    Object.defineProperties(newError,
-                        Object.getOwnPropertyDescriptors(target));
-                    return newError;
-                }
+            if (mappedCtor) {
+                const newError = new mappedCtor();
+                Object.defineProperties(newError,
+                    Object.getOwnPropertyDescriptors(target));
+                return newError;
             }
         }
 
@@ -1539,26 +1964,35 @@ class Marshal {
         // 创建封送代理
         const proxy = new Proxy(target, {
             apply(target, thisArg, argArray) {
-                const marshalledThis = Marshal.#marshal(thisArg, sourceDomain);
-                const marshalledArgs = Marshal.#marshalArray(argArray, sourceDomain);
+                const defaultApply = () => {
+                    const marshalledThis = Marshal.#marshal(thisArg, sourceDomain);
+                    const marshalledArgs = Marshal.#marshalArray(argArray, sourceDomain);
 
-                return Marshal.#trapDomain(sourceDomain, () => {
-                    const rule = ruleRef.rule;
+                    return Marshal.#trapDomain(sourceDomain, () => {
+                        const rule = ruleRef.rule;
 
-                    if (rule && !rule.canAccess(AccessAction.CALL,
-                        target, marshalledThis, marshalledArgs))
-                        throw new ReferenceError("Access denied");
+                        if (rule && !rule.canAccess(AccessAction.CALL,
+                            target, marshalledThis, marshalledArgs))
+                            throw new ReferenceError("Access denied");
 
-                    const args = [target, marshalledThis, marshalledArgs];
-                    const dispatched = DomainMonitors.dispatch(
-                        sourceDomain, targetDomain, AccessAction.CALL, args);
+                        const args = [target, marshalledThis, marshalledArgs];
+                        const dispatched = DomainMonitors.dispatch(
+                            sourceDomain, targetDomain, AccessAction.CALL, args);
 
-                    if (dispatched.preventDefault)
-                        return Marshal.#marshal(dispatched.returnValue, targetDomain);
+                        if (dispatched.preventDefault)
+                            return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
-                    const result = Reflect.apply(...args);
-                    return Marshal.#marshal(result, targetDomain);
-                });
+                        const result = Reflect.apply(...args);
+                        return Marshal.#marshal(result, targetDomain);
+                    });
+                };
+
+                // 此处处理异步封送
+                // 如果没有逃逸情况，此处代表着当前是异步调用
+                if (Domain.current !== targetDomain)
+                    return Marshal.#trapDomain(targetDomain, defaultApply);
+
+                return defaultApply();
             },
             construct(target, argArray, newTarget) {
                 const marshalledArgs = Marshal.#marshalArray(argArray, sourceDomain);
@@ -1625,10 +2059,9 @@ class Marshal {
                     return Reflect.defineProperty(...args);
                 };
 
-                if (isSourceDomain)
-                    return domainTrapAction();
-
-                return Marshal.#trapDomain(sourceDomain, domainTrapAction);
+                return isSourceDomain
+                    ? domainTrapAction()
+                    : Marshal.#trapDomain(sourceDomain, domainTrapAction);
             },
             deleteProperty(target, p) {
                 return Marshal.#trapDomain(sourceDomain, () => {
@@ -1648,6 +2081,10 @@ class Marshal {
                 });
             },
             get(target, p, receiver) {
+                // 因为 get 的东西最多，所以对此追加注释
+                // 其他的拦截器都是与 get 类似
+
+                // 向外暴露封送
                 switch (p) {
                     case Marshal.#revertTarget:
                         return target;
@@ -1655,27 +2092,35 @@ class Marshal {
                         return sourceDomain;
                 }
 
+                // 默认封送
                 const marshalledReceiver = Marshal.#marshal(receiver, sourceDomain);
 
+                // 陷入源运行域执行
                 return Marshal.#trapDomain(sourceDomain, () => {
+                    // 获取封送规则并检查
                     const rule = ruleRef.rule;
 
-                    if (rule && !rule.canAccess(AccessAction.READ, target, p, receiver))
+                    if (rule && !rule.canAccess(AccessAction.READ,
+                        target, p, marshalledReceiver))
                         throw new ReferenceError("Access denied");
 
+                    // 通知 Monitor
                     const args = [target, p, marshalledReceiver];
                     const dispatched = DomainMonitors.dispatch(
                         sourceDomain, targetDomain, AccessAction.READ, args);
 
+                    // 处理 Monitor 的结果
                     if (dispatched.preventDefault)
                         return Marshal.#marshal(dispatched.returnValue, targetDomain);
 
+                    // 执行默认流程
                     const result = Reflect.get(...args);
                     return Marshal.#marshal(result, targetDomain);
                 });
             },
             getOwnPropertyDescriptor(target, p) {
                 const isSourceDomain = Domain.current === sourceDomain;
+
                 const domainTrapAction = () => {
                     const rule = ruleRef.rule;
 
@@ -1791,7 +2236,7 @@ class Marshal {
                     const rule = ruleRef.rule;
 
                     if (rule && !rule.canAccess(AccessAction.WRITE,
-                        target, p, newValue, receiver))
+                        target, p, marshalledNewValue, marshalledReceiver))
                         throw new ReferenceError("Access denied");
 
                     const args = [target, p, marshalledNewValue, marshalledReceiver];
@@ -1813,7 +2258,7 @@ class Marshal {
                 return Marshal.#trapDomain(sourceDomain, () => {
                     const rule = ruleRef.rule;
 
-                    if (rule && !rule.canAccess(AccessAction.META, target, v))
+                    if (rule && !rule.canAccess(AccessAction.META, target, marshalledV))
                         throw new ReferenceError("Access denied");
 
                     const args = [target, marshalledV];
@@ -1872,6 +2317,8 @@ class Domain {
     /** @type {Array<WeakRef<Domain>>} */
     static #domainLinks = [];
 
+    #domainName = "top";
+
     /** @type {typeof Object} */
     #domainObject = null;
     /** @type {typeof Error} */
@@ -1898,11 +2345,13 @@ class Domain {
         let global = window.replacedGlobal || window;
 
         if (Domain.#currentDomain) {
-            if (!createRealm)
+            if (!createRealms)
                 throw new ReferenceError("Sandbox 载入时处于不安全运行域");
 
-            global = createRealm();
-        }
+            global = createRealms();
+            this.#domainName = Math.random().toString(36).slice(2);
+        } else
+            NativeWrapper.initTopDomain(global);
 
         this.#domainRoot = global;
         this.#domainObject = global.Object;
@@ -1910,13 +2359,16 @@ class Domain {
         this.#domainPromise = global.Promise;
 
         this.#domainIsArray = global.Array.isArray;
-        global.Array.isArray = new global
-            .Function("array", "return this(array)")
-            .bind(Domain.#isArray);
 
+        NativeWrapper.wrapInDomains(global);
         Globals.ensureDomainGlobals(this);
         DomainMonitors.handleNewDomain(this);
         Domain.#domainLinks.push(new WeakRef(this));
+        sealObjectTree(this);
+
+        global.Array.isArray = new global
+            .Function("domain", "array", "return this(domain, array)")
+            .bind(Domain.#isArray, this);
     }
 
     // 实装这个要代理Object喵
@@ -1926,6 +2378,25 @@ class Domain {
     //             (SandboxSignal_UnpackProxy, obj);
 
     //     return Domain.#hasInstance.call(this, obj);
+    // }
+
+    // 效率影响不确定，暂不实装
+    // static #marshalledThen = function (onfulfilled, onrejected) {
+    //     if (Marshal.isMarshalled(this)) {
+    //         const [domain, promise] = Marshal[SandboxExposer2]
+    //             (SandboxSignal_UnpackProxy, this);
+
+    //         const marshaller = value => {
+    //             return this(trapMarshal(domain, Domain.current, value));
+    //         };
+
+    //         return trapMarshal(domain, Domain.current, promise.then(
+    //             marshaller.bind(onfulfilled),
+    //             marshaller.bind(onrejected)
+    //         ));
+    //     }
+
+    //     return [[DefaultThen]].call(this, onfulfilled, onrejected);
     // }
 
     /**
@@ -1981,6 +2452,12 @@ class Domain {
             .call(this.#domainError, error);
     }
 
+    // TODO: 判断iframe、window、window.open、service-worker等危险对象
+
+    toString() {
+        return `[Domain ${this.#domainName}]`;
+    }
+
     /**
      * ```plain
      * 替代 Array.isArray 并暴露给外部
@@ -1990,9 +2467,7 @@ class Domain {
      * @param {any} array 
      * @returns {boolean} 
      */
-    static #isArray = function (array) {
-        let domain = Domain.#currentDomain;
-
+    static #isArray = function (domain, array) {
         if (Marshal.isMarshalled(array))
             [domain, array] = Marshal[SandboxExposer2]
                 (SandboxSignal_UnpackProxy, array);
@@ -2103,7 +2578,9 @@ class Domain {
             case SandboxSignal_SetMarshalledProxy:
                 return void this.#marshalledCached.set(...args);
             case SandboxSignal_GetWindow:
-                return this.#domainRoot;;
+                return this.#domainRoot;
+            case SandboxSignal_GetPromise:
+                return this.#domainPromise;
         }
     }
 
@@ -2191,7 +2668,7 @@ class Sandbox {
         this.#sourceDomain = Domain.current;
         this.#domain = new Domain();
         this.#domainWindow = this.#domain[SandboxExposer](SandboxSignal_GetWindow);
-        this.#domainDocument = this.#domainWindow.document;
+        this.#domainDocument = null; // 默认不开放DOM，而且我们也缺少BrowserContext
         this.#domainObject = this.#domainWindow.Object;
         this.#domainFunction = this.#domainWindow.Function;
         Sandbox.#domainMap.set(this.#domain, this);
@@ -2200,6 +2677,10 @@ class Sandbox {
     }
 
     /**
+     * ```plain
+     * 封装沙盒的 Function 函数
+     * ```
+     * 
      * @param {Sandbox} thiz 
      */
     static #initDomainFunctions = function (thiz) {
@@ -2304,6 +2785,11 @@ class Sandbox {
      * ```
      */
     initBuiltins() {
+        /**
+         * ```plain
+         * 如果要扩充沙盒的内建函数或类，请在此增加喵
+         * ```
+         */
         const builtins = {
             Object: this.#domainObject,
             Function: this.#domainFunction,
@@ -2333,11 +2819,17 @@ class Sandbox {
             JSON: this.#domainWindow.JSON,
             eval: this.#domainWindow.eval,
             setTimeout: this.#domainWindow.setTimeout,
-            setInterval: this.#domainWindow.setInterval,
-            setImmediate: this.#domainWindow.setImmediate,
             clearTimeout: this.#domainWindow.clearTimeout,
+            setInterval: this.#domainWindow.setInterval,
             clearInterval: this.#domainWindow.clearInterval,
+            setImmediate: this.#domainWindow.setImmediate,
             clearImmediate: this.#domainWindow.clearImmediate,
+            requestAnimationFrame: this.#domainWindow.requestAnimationFrame,
+            cancelAnimationFrame: this.#domainWindow.cancelAnimationFrame,
+            requestIdleCallback: this.#domainWindow.requestIdleCallback,
+            cancelIdleCallback: this.#domainWindow.cancelIdleCallback,
+            queueMicrotask: this.#domainWindow.queueMicrotask,
+            MutationObserver: this.#domainWindow.MutationObserver,
             alert: this.#domainWindow.alert,
             confirm: this.#domainWindow.confirm,
             console: this.#domainWindow.console,
@@ -2356,7 +2848,7 @@ class Sandbox {
         for (const [k, v] of Object.entries(builtins)) {
             if (!v)
                 delete builtins[k];
-            if (typeof v == "function" && !v.prototype)
+            if (typeof v == "function" && !("prototype" in v))
                 builtins[k] = v.bind(null);
         }
 
@@ -2373,8 +2865,8 @@ class Sandbox {
 
         Reflect.defineProperty(this.#scope, "document", {
             get: (function () {
-                return this;
-            }).bind(this.#domainDocument),
+                return this.#domainDocument;
+            }).bind(this),
             enumerable: false,
             configurable: false,
         });
@@ -2570,22 +3062,44 @@ class Sandbox {
 }
 
 function sealClass(clazz) {
-    Object.freeze(clazz);
+    sealObjectTree(clazz);
 
     if (typeof clazz == "function")
-        Object.freeze(clazz.prototype);
+        sealObjectTree(clazz.prototype);
     else if (clazz.constructor)
-        Object.freeze(clazz.constructor);
+        sealObjectTree(clazz.constructor);
 }
 
-sealClass(AccessAction);
-sealClass(Rule);
-sealClass(Globals);
-sealClass(DomainMonitors);
-sealClass(Monitor);
-sealClass(Marshal);
-sealClass(Domain);
-sealClass(Sandbox);
+// FREEZE FROM SOUL!
+function sealObjectTree(obj) {
+    sealObject(obj, o => {
+        if (!Reflect.isExtensible(o)) // 防止1103
+            return;
+        if (o === obj)
+            return void Object.freeze(o);
+
+        sealObjectTree(o);
+    });
+}
+
+function sealObject(obj, freeze = Object.freeze) {
+    if (isPrimitive(obj))
+        return;
+
+    const descriptors = Object.getOwnPropertyDescriptors(obj);
+
+    freeze(obj);
+
+    // 防止通过函数属性传值
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+        if (descriptor.get)
+            freeze(descriptor.get);
+        if (descriptor.set)
+            freeze(descriptor.set);
+        if (!isPrimitive(descriptor.value))
+            freeze(descriptor.value);
+    }
+}
 
 const SANDBOX_EXPORT = {
     AccessAction,
@@ -2596,81 +3110,103 @@ const SANDBOX_EXPORT = {
     Sandbox,
 };
 
-// 确保顶级运行域的原型链不暴露
-if (window.top === window) {
-    const document = window.document;
-    const createElement = document.createElement.bind(document);
-    const appendChild = document.body.appendChild.bind(document.body);
-    const iframe = createElement("iframe");
-    iframe.style.display = "none";
-    appendChild(iframe);
+if (SANDBOX_ENABLED) {
+    // 确保顶级运行域的原型链不暴露
+    if (window.top === window) {
+        const document = window.document;
+        const createElement = document.createElement.bind(document);
+        const appendChild = document.body.appendChild.bind(document.body);
+        const iframe = createElement("iframe");
+        iframe.style.display = "none";
+        appendChild(iframe);
 
-    Reflect.defineProperty(iframe.contentWindow, "createRealm", {
-        value() {
-            const iframe = createElement("iframe");
-            iframe.style.display = "none";
-            appendChild(iframe);
+        Reflect.defineProperty(iframe.contentWindow, "createRealms", {
+            value() {
+                const iframe = createElement("iframe");
+                iframe.style.display = "none";
+                appendChild(iframe);
 
-            const window = iframe.contentWindow;
-            if (!window)
-                throw new ReferenceError("顶级域已经被卸载");
+                const window = iframe.contentWindow;
+                if (!window)
+                    throw new ReferenceError("顶级域已经被卸载");
 
-            iframe.remove();
-            return window;
-        },
-    });
+                iframe.remove();
+                return window;
+            },
+        });
 
-    iframe.contentWindow.replacedGlobal = window;
+        iframe.contentWindow.replacedGlobal = window;
+        iframe.contentWindow.replacedCI1 = ContextInvoker1;
+        iframe.contentWindow.replacedCI2 = ContextInvoker2;
+        iframe.contentWindow.replacedCIC = ContextInvokerCreator;
 
-    const script = iframe.contentDocument.createElement("script");
-    script.src = FILE_URL;
-    script.type = "module";
+        const script = iframe.contentDocument.createElement("script");
+        script.src = FILE_URL;
+        script.type = "module";
 
-    const promise = new Promise((resolve, reject) => {
-        script.onload = resolve;
-        script.onerror = reject;
-    });
-    iframe.contentDocument.head.appendChild(script);
-    await promise;
+        const promise = new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = reject;
+        });
+        iframe.contentDocument.head.appendChild(script);
+        await promise;
 
-    delete iframe.contentWindow.replacedGlobal;
-    Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
-    iframe.remove();
+        delete iframe.contentWindow.replacedGlobal;
+        delete iframe.contentWindow.replacedCI1;
+        delete iframe.contentWindow.replacedCI2;
+        delete iframe.contentWindow.replacedCIC;
+        Object.assign(SANDBOX_EXPORT, iframe.contentWindow.SANDBOX_EXPORT);
+        iframe.remove();
 
-    ({
-        AccessAction,
-        Rule,
-        Monitor,
-        Marshal,
-        Domain,
-        Sandbox,
-    } = SANDBOX_EXPORT);
-} else {
-    // 防止被不信任代码更改
-    sealClass(Object);
-    sealClass(Array);
-    sealClass(Function);
-    sealClass(Promise);
-    sealClass(String);
-    sealClass(Number);
-    sealClass(Boolean);
-    sealClass(Symbol);
-    sealClass(Reflect);
-    sealClass(Proxy);
-    sealClass(Date);
-    sealClass(Math);
-    sealClass(Error);
-    sealClass(TypeError);
-    sealClass(ReferenceError);
-    sealClass(RangeError);
-    sealClass(EvalError);
-    sealClass(SyntaxError);
+        ({
+            AccessAction,
+            Rule,
+            Monitor,
+            Marshal,
+            Domain,
+            Sandbox,
+        } = SANDBOX_EXPORT);
+    } else {
+        // 防止被不信任代码更改
+        sealClass(AccessAction);
+        sealClass(Rule);
+        sealClass(Globals);
+        sealClass(DomainMonitors);
+        sealClass(Monitor);
+        sealClass(Marshal);
+        sealClass(Domain);
+        sealClass(Sandbox);
 
-    // 改为此处初始化，防止多次初始化
-    Domain[SandboxExposer2](SandboxSignal_InitDomain);
+        sealClass(Object);
+        sealClass(Array);
+        sealClass(Function);
+        sealClass(Promise);
+        sealClass(RegExp);
+        sealClass(String);
+        sealClass(Number);
+        sealClass(Boolean);
+        sealClass(Symbol);
+        sealClass(Reflect);
+        sealClass(Proxy);
+        sealClass(Date);
+        sealClass(Math);
+        sealClass(Error);
+        sealClass(TypeError);
+        sealClass(ReferenceError);
+        sealClass(RangeError);
+        sealClass(EvalError);
+        sealClass(SyntaxError);
 
-    window.SANDBOX_EXPORT =
-        Object.assign({}, SANDBOX_EXPORT);
+        sealClass(function* () { }.constructor);
+        sealClass(async function () { }.constructor);
+        sealClass(async function* () { }.constructor);
+
+        // 改为此处初始化，防止多次初始化
+        Domain[SandboxExposer2](SandboxSignal_InitDomain);
+
+        window.SANDBOX_EXPORT =
+            Object.assign({}, SANDBOX_EXPORT);
+    }
 }
 
 export {
@@ -2680,4 +3216,5 @@ export {
     Marshal,
     Domain,
     Sandbox,
+    SANDBOX_ENABLED,
 };

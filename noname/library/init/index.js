@@ -602,23 +602,26 @@ export class LibInit extends Uninstantable {
 		let ModAsyncFunction = AsyncFunction;
 		// let ModAsyncGeneratorFunction = AsyncGeneratorFunction;
 
+		// TODO: 对于本地代码考虑放过
 		// 虽然现在 parsex 被控制到了沙盒，
 		// 但是因为默认沙盒还是可以额外操作东西，
 		// 故而对此再进行一层包裹
-		const domain = Marshal.getMarshalledDomain(item) || Domain.caller;
+		if (security.SANDBOX_ENABLED) {
+			const domain = Marshal.getMarshalledDomain(item) || Domain.caller;
 
-		if (domain && domain !== Domain.topDomain) {
-			const sandbox = Sandbox.from(domain);
+			if (domain && domain !== Domain.topDomain) {
+				const sandbox = Sandbox.from(domain);
 
-			if(!sandbox)
-				throw "意外的运行域: 运行域没有绑定沙盒";
+				if (!sandbox)
+					throw "意外的运行域: 运行域没有绑定沙盒";
 
-			[
-				ModFunction,
-				ModGeneratorFunction,
-				ModAsyncFunction,
-				// ModAsyncGeneratorFunction,
-			] = security.getIsolateds(sandbox);
+				[
+					ModFunction,
+					ModGeneratorFunction,
+					ModAsyncFunction,
+					// ModAsyncGeneratorFunction,
+				] = security.getIsolateds(sandbox);
+			}
 		}
 
 		//by 诗笺、Tipx-L
@@ -721,8 +724,9 @@ export class LibInit extends Uninstantable {
 				else {
 					if (Symbol.iterator in item) return lib.init.parsex(Array.from(item));
 					// IC97 Patched
-					security.assertSafeObject(item, "toString");
-					if (item.toString !== Object.prototype.toString) return lib.init.parsex(item.toString());
+					// 根据狂神喵的建议，禁用parsex接受字符串喵
+					// security.assertSafeObject(item, "toString");
+					// if (item.toString !== Object.prototype.toString) return lib.init.parsex(item.toString());
 					if ("render" in item) {
 						// TODO: Object Render Parse
 						throw new Error("NYI: Object Render Parse");
@@ -779,9 +783,9 @@ export class LibInit extends Uninstantable {
 					content._gen = true
 					return content
 				} else if (item._parsed) return item;
-			// falls through
-			default:
 				return Legacy(item);
+			default:
+				throw new TypeError("为确保安全禁止用parsex解析字符串");
 		}
 	}
 

@@ -1380,22 +1380,26 @@ export class Get extends Uninstantable {
 	static infoPlayerOL(info) { return lib.playerOL ? (lib.playerOL[info.slice(15)] || info) : info; }
 	static playersInfoOL(players) { return Array.from(players || []).map(get.playerInfoOL); }
 	static infoPlayersOL(infos) { return Array.from(infos || []).map(get.infoPlayerOL); }
+
 	// IC97 Patched
 	static #arrowPattern = /^(?:([\w$]+)|\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\))\s*=>/;
 	static #fullPattern = /^([\w\s*]+)\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\)\s*\{/;
+
+	// TODO: 重构增加反注入
 	static pureFunctionStr(str) {
 		str = str.trim();
 		if (get.#arrowPattern.test(str)) return str;
 		const fullMatch = get.#fullPattern.exec(str);
-		if(!fullMatch) return '()=>console.warn("无法识别的远程代码")';
+		if (!fullMatch) return '()=>console.warn("无法识别的远程代码")';
 		const head = fullMatch[1];
 		const args = fullMatch[2] || '';
 		str = `(${args}){${str.slice(fullMatch[0].length)}`;
-		if(head.includes("*")) str = "*" + str;
+		if (head.includes("*")) str = "*" + str;
 		str = "function" + str;
-		if(/\basync\b/.test(head)) str = "async " + str;
+		if (/\basync\b/.test(head)) str = "async " + str;
 		return str;
 	}
+
 	static funcInfoOL(func) {
 		// IC97 Patched
 		if (typeof func == 'function') {
@@ -1418,9 +1422,11 @@ export class Get extends Uninstantable {
 		try {
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return function () { };
-			const loadStr = `return (${str});`;
-			const box = security.currentSandbox();
-			func = box.exec(loadStr);
+			if (security.SANDBOX_ENABLED) {
+				const loadStr = `return (${str});`;
+				const box = security.currentSandbox();
+				func = box.exec(loadStr);
+			} else eval(`func = (${str});`);
 		} catch (e) {
 			console.error(`${e} in \n${str}`);
 			return function () { };
