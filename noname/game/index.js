@@ -2001,7 +2001,9 @@ export class Game extends Uninstantable {
 			const str = zip.file('extension.js').asText();
 			if (str === "" || undefined) throw ('你导入的不是扩展！请选择正确的文件');
 			_status.importingExtension = true;
-			eval(str);
+			// IC97 Patched
+			// eval(str);
+			security.eval(str);
 			await Promise.allSettled(_status.extensionLoading);
 			delete _status.extensionLoading;
 			_status.importingExtension = false;
@@ -7703,7 +7705,10 @@ export class Game extends Uninstantable {
 		}]]));
 		lib.status.reload++;
 		return new Promise((resolve, reject) => {
-			const record = lib.db.transaction([storeName], 'readwrite').objectStore(storeName).put(value, idbValidKey);
+			// IC97 Patched
+			// 清洗代理对象
+			const record = lib.db.transaction([storeName], 'readwrite')
+				.objectStore(storeName).put(structuredClone(value), idbValidKey);
 			record.onerror = event => {
 				if (typeof onError == 'function') {
 					onError(event);

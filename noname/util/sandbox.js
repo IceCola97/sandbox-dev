@@ -1924,7 +1924,8 @@ class Marshal {
         if (sourceDomain === targetDomain)
             return target;
 
-        if (Marshal.#strictMarshal(target))
+        if (Marshal.#strictMarshal(target)
+            || sourceDomain.isUnsafe(target))
             throw new TypeError("对象无法封送");
         if (!Marshal.#shouldMarshal(target))
             return target;
@@ -2325,6 +2326,24 @@ class Domain {
     #domainError = null;
     /** @type {typeof Promise} */
     #domainPromise = null;
+    /** @type {typeof HTMLIFrameElement} */
+    #domainIFrame = null;
+    /** @type {Navigator} */
+    #domainNavigator = null;
+    /** @type {ServiceWorker} */
+    #domainServiceWorker = null;
+    /** @type {Location} */
+    #domainLocation = null;
+    /** @type {Function} */
+    #domainOpen = null;
+    /** @type {Function} */
+    #domainClose = null;
+    /** @type {typeof Worker} */
+    #domainWorker = null;
+    /** @type {Object} */
+    #domainCSS = null;
+    /** @type {typeof SharedWorker} */
+    #domainSharedWorker = null;
     /** @type {Window} */
     #domainRoot = null;
     /** @type {WeakMap<Object, Proxy>} */
@@ -2357,6 +2376,15 @@ class Domain {
         this.#domainObject = global.Object;
         this.#domainError = global.Error;
         this.#domainPromise = global.Promise;
+        this.#domainIFrame = global.HTMLIFrameElement;
+        this.#domainNavigator = global.navigator;
+        this.#domainServiceWorker = global.navigator.serviceWorker;
+        this.#domainLocation = global.location;
+        this.#domainOpen = global.open;
+        this.#domainClose = global.close;
+        this.#domainWorker = global.Worker;
+        this.#domainCSS = global.CSS;
+        this.#domainSharedWorker = global.SharedWorker;
 
         this.#domainIsArray = global.Array.isArray;
 
@@ -2452,7 +2480,42 @@ class Domain {
             .call(this.#domainError, error);
     }
 
-    // TODO: 判断iframe、window、window.open、service-worker等危险对象
+    /**
+     * ```plain
+     * 检查对象是否来自于当前的运行域的危险对象
+     * ```
+     * 
+     * @param {Object} obj 
+     * @returns {boolean} 
+     */
+    isUnsafe(obj) {
+        if (Marshal.isMarshalled(obj))
+            [, obj] = Marshal[SandboxExposer2]
+                (SandboxSignal_UnpackProxy, obj);
+
+        if (obj === this.#domainRoot)
+            return true;
+        if (Domain.#hasInstance.call(this.#domainIFrame, obj))
+            return true;
+        if (obj === this.#domainNavigator)
+            return true;
+        if (obj === this.#domainServiceWorker)
+            return true;
+        if (obj === this.#domainLocation)
+            return true;
+        if (obj === this.#domainOpen)
+            return true;
+        if (obj === this.#domainClose)
+            return true;
+        if (Domain.#hasInstance.call(this.#domainWorker, obj))
+            return true;
+        if (obj === this.#domainCSS)
+            return true;
+        if (Domain.#hasInstance.call(this.#domainSharedWorker, obj))
+            return true;
+
+        return false;
+    }
 
     toString() {
         return `[Domain ${this.#domainName}]`;
@@ -2703,6 +2766,7 @@ class Sandbox {
 
             const code = argArray.slice(-1)[0];
             const params = argArray.slice(0, -1);
+            new target(code); // 防止注入
 
             const compiled = Sandbox.#compileCore(thiz, code, null, params, true);
             compiled[Symbol.toStringTag] = `function (${params.join(", ")}) {\n${code}\n}`;
@@ -2845,12 +2909,14 @@ class Sandbox {
             undefined: undefined,
         };
 
-        for (const [k, v] of Object.entries(builtins)) {
-            if (!v)
-                delete builtins[k];
-            if (typeof v == "function" && !("prototype" in v))
-                builtins[k] = v.bind(null);
-        }
+        Marshal[SandboxExposer2](SandboxSignal_TrapDomain, this.#domain, () => {
+            for (const [k, v] of Object.entries(builtins)) {
+                if (!v)
+                    delete builtins[k];
+                if (typeof v == "function" && !("prototype" in v))
+                    builtins[k] = v.bind(null);
+            }
+        });
 
         Object.assign(this.#scope, builtins);
 
@@ -2897,38 +2963,26 @@ class Sandbox {
 
     /**
      * ```plain
-     * 基于给定的代码与当前的scope来构造一个闭包函数
-     * 
-     * 参数context指定临时上下文，类似与scope但是里面的变量优先级高于scope
-     * 另外可以通过context.this属性来指定函数的this
-     * 
-     * 请注意，当沙盒闭包函数构造后，scope将被闭包固定
-     * 这意味着pushScope与popScope不会影响到构造好的函数
+     * 核心编译函数
      * ```
      * 
-     * @param {string} code 沙盒闭包函数的代码
-     * @param {Object} context 临时上下文
-     * @returns {(...) => any} 构造的沙盒闭包函数
+     * @param {Sandbox} thiz 当前沙盒实例
+     * @param {string} code 代码字符串
+     * @param {Object?} context 额外的执行上下文
+     * @param {Array<string>?} paramList 参数名列表，以此来创建可以传递参数的函数
+     * @param {boolean?} inheritScope 是否继承当前正在执行的scope而不是当前沙盒的scope
+     * @param {"exists"|"extend"|"all"} writeContext 当执行的代码尝试为未声明的变量赋值时，应该 根据context与window的变量写入(默认行为)|默认行为并且新的变量写入context|全部写入context
+     * @returns 
      */
-    compile(code, context = null) {
-        return Sandbox.#compileCore(this, code, context);
-    }
-
-    static #compileCore = function (thiz, code, context = null, paramList = null, inheritScope = false) {
+    static #compileCore = function (thiz, code, context = null,
+        paramList = null, inheritScope = false, writeContext = 'exists') {
         if (typeof code != "string")
             throw new TypeError("代码需要是一个字符串");
         if (isPrimitive(context))
             context = {};
 
-        const params = Object.keys(context);
-
         // 进行语法检查，防止注入
-        try {
-            new thiz.#domainFunction(...params, code);
-        } catch (e) {
-            code = "return " + code;
-            new thiz.#domainFunction(...params, code);
-        }
+        new thiz.#domainFunction(code);
 
         const executingScope = Sandbox.#executingScope[Sandbox.#executingScope.length - 1];
         const scope = inheritScope && executingScope || thiz.#scope;
@@ -2936,6 +2990,7 @@ class Sandbox {
         const argsName = Sandbox.#makeName("__args_", scope);
         const parameters = paramList
             ? paramList.join(", ") : "";
+        const writeContextAction = { exists: 0, extend: 1, all: 2 }[writeContext] || 0;
 
         let argumentList;
 
@@ -2965,6 +3020,13 @@ class Sandbox {
                     throw new domainWindow.ReferenceError(`${p} is not defined`);
 
                 return target[p];
+            },
+            set(target, p, v) {
+                if (writeContextAction == 2
+                    || (writeContextAction == 1 && !(p in target)))
+                    return Reflect.set(marshalledContext, p, v);
+
+                return Reflect.set(target, p, v);
             },
         });
 
@@ -2996,6 +3058,25 @@ class Sandbox {
 
     /**
      * ```plain
+     * 基于给定的代码与当前的scope来构造一个闭包函数
+     * 
+     * 参数context指定临时上下文，类似与scope但是里面的变量优先级高于scope
+     * 另外可以通过context.this属性来指定函数的this
+     * 
+     * 请注意，当沙盒闭包函数构造后，scope将被闭包固定
+     * 这意味着pushScope与popScope不会影响到构造好的函数
+     * ```
+     * 
+     * @param {string} code 沙盒闭包函数的代码
+     * @param {Object?} context 临时上下文
+     * @returns {(...) => any} 构造的沙盒闭包函数
+     */
+    compile(code, context = null) {
+        return Sandbox.#compileCore(this, code, context);
+    }
+
+    /**
+     * ```plain
      * 基于当前的scope在沙盒环境下执行给定的代码
      * 
      * 参数context指定临时上下文，类似与scope但是里面的变量优先级高于scope
@@ -3003,11 +3084,37 @@ class Sandbox {
      * ```
      * 
      * @param {string} code 沙盒闭包函数的代码
-     * @param {Object} context 临时上下文
+     * @param {Object?} context 临时上下文
      * @returns 执行代码的返回值
      */
     exec(code, context = null) {
         return this.compile(code, context)();
+    }
+
+    /**
+     * ```plain
+     * 基于当前的scope在沙盒环境下执行给定的代码
+     * 
+     * 参数context指定临时上下文，类似与scope但是里面的变量优先级高于scope
+     * 另外可以通过context.this属性来指定函数的this
+     * 
+     * 与exec的区别在于，此函数可以指定未定义变量赋值行为
+     * 当 `readonly` 为false时，不存在的全局变量的赋值行为将被转移到context里面
+     * 当 `readonly` 为true(默认)时，任何全局变量的赋值行为将被转移到context里面
+     * ```
+     * 
+     * @param {string} code 沙盒闭包函数的代码
+     * @param {Object?} context 临时上下文(没有给出将自动创建)
+     * @param {boolean} readonly 是否拦截所有全局变量的赋值
+     * @returns {[any, Object]} [执行代码的返回值, 参数context]
+     */
+    exec2(code, context = null, readonly = true) {
+        if (isPrimitive(context))
+            context = {};
+
+        const compiled = Sandbox.#compileCore(this, code, context,
+            null, false, readonly ? "all" : "extend");
+        return [compiled(), context];
     }
 
     /**
@@ -3109,6 +3216,8 @@ const SANDBOX_EXPORT = {
     Domain,
     Sandbox,
 };
+
+// TODO: 其他扩展的全局变量
 
 if (SANDBOX_ENABLED) {
     // 确保顶级运行域的原型链不暴露

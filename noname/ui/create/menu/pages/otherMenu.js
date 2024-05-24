@@ -169,9 +169,12 @@ export const otherMenu = function (connectMenu) {
 						dev = 'nodev';
 					}
 					lib.init.req('game/source.js', function () {
+						var updates = null;
+
 						try {
-							eval(this.responseText);
-							if (!window.noname_source_list) {
+							debugger; // NEED TO VIEW DATA
+							({ noname_source_list: updates } = security.exec2(this.responseText, "window"));
+							if (!updates) {
 								throw ('err');
 							}
 						}
@@ -181,8 +184,6 @@ export const otherMenu = function (connectMenu) {
 							return;
 						}
 
-						var updates = window.noname_source_list;
-						delete window.noname_source_list;
 						if (Array.isArray(files)) {
 							files.add('game/update.js');
 							var files2 = [];
@@ -244,9 +245,12 @@ export const otherMenu = function (connectMenu) {
 				};
 
 				lib.init.req('game/update.js', function () {
+					var update = null;
+
 					try {
-						eval(this.responseText);
-						if (!window.noname_update) {
+						debugger; // NEED TO VIEW DATA
+						({ noname_update: update } = security.exec2(this.responseText, "window"));
+						if (!update) {
 							throw ('err');
 						}
 					}
@@ -256,8 +260,6 @@ export const otherMenu = function (connectMenu) {
 						return;
 					}
 
-					var update = window.noname_update;
-					delete window.noname_update;
 					if (forcecheck === false) {
 						if (update.version == lib.config.check_version) {
 							return;
@@ -370,9 +372,16 @@ export const otherMenu = function (connectMenu) {
 				button2.innerHTML = '正在检查更新';
 				button2.disabled = true;
 				lib.init.req('game/asset.js', function () {
+					var updates = null;
+					var skins = null;
+
 					try {
-						eval(this.responseText);
-						if (!window.noname_asset_list || !window.noname_skin_list) {
+						debugger; // NEED TO VIEW DATA
+						({
+							noname_asset_list: updates,
+							noname_skin_list: skins,
+						} = security.exec2(this.responseText, "window"));
+						if (!updates || !skins) {
 							throw ('err');
 						}
 					}
@@ -382,10 +391,6 @@ export const otherMenu = function (connectMenu) {
 						return;
 					}
 
-					var updates = window.noname_asset_list;
-					delete window.noname_asset_list;
-					var skins = window.noname_skin_list;
-					delete window.noname_skin_list;
 					var asset_version = updates.shift();
 
 					var skipcharacter = [], skipcard = ['tiesuo_mark', 'shield'];
@@ -1112,11 +1117,12 @@ export const otherMenu = function (connectMenu) {
 				ai: ai,
 				cheat: lib.cheat
 			});
-			if (security.SANDBOX_ENABLED) {
+			if (security.isSandboxRequired()) {
 				new Monitor()
 					.action(AccessAction.DEFINE)
 					.action(AccessAction.WRITE)
 					.action(AccessAction.DELETE)
+					.require("target", proxyWindow)
 					.require("property", "_status", "lib", "game", "ui", "get", "ai", "cheat")
 					.then((access, nameds, control) => {
 						if (access.action == AccessAction.DEFINE) {
@@ -1127,7 +1133,8 @@ export const otherMenu = function (connectMenu) {
 						}
 
 						control.overrideParameter("target", window);
-					});
+					})
+					.start();
 			} else {
 				const keys = ["_status", "lib", "game", "ui", "get", "ai", "cheat"];
 
@@ -1154,9 +1161,8 @@ export const otherMenu = function (connectMenu) {
 			 * @type { (value:string)=>any }
 			 */
 			let fun
-			if (security.SANDBOX_ENABLED) {
-				fun=security.currentSandbox()
-				.exec(`
+			if (security.isSandboxRequired()) {
+				fun = security.eval(`
 					const _status=window._status;
 					const lib=window.lib;
 					const game=window.game;

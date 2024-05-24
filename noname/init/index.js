@@ -454,7 +454,9 @@ export async function boot() {
 				//var backup_onload=lib.init.onload;
 				_status.evaluatingExtension = true;
 				try {
-					eval(extcontent);
+					// IC97 Patched
+					debugger; // NEED TO VIEW DATA
+					security.eval(extcontent);
 				}
 				catch (e) {
 					console.log(e);

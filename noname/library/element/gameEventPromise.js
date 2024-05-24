@@ -4,6 +4,9 @@ import { Library as lib } from "../index.js";
 import { status as _status } from '../../status/index.js';
 import { AsyncFunction } from '../../util/index.js';
 
+// IC97 Patched
+import security from '../../util/security.js';
+
 /**
  * 将事件Promise化以使用async异步函数来执行事件。
  * 
@@ -141,12 +144,21 @@ export class GameEventPromise extends Promise {
 	 * ```
 	 */
 	async debugger() {
+		// IC97 Patched
+		if (security.isSandboxRequired())
+			throw new Error("当前模式下禁止调试");
 		return new Promise(resolve => {
 			const runCode = function (event, code) {
 				try {
 					// 为了使玩家调试时使用var player=xxx时不报错，故使用var
-					var { player, _trigger: trigger, _result: result } = event;
-					return eval(code);
+					// var { player, _trigger: trigger, _result: result } = event;
+					var context = { 
+						event,
+						player: event.player,
+						_trigger: event.trigger,
+						_result: event.result,
+					};
+					return security.exec(`return ${code}`, context);
 				} catch (error) {
 					return error;
 				}
@@ -184,18 +196,18 @@ export class GameEventPromise extends Promise {
 	 * 
 	 * @returns {Promise} 返回的结果
 	 */
-	forResult(){
-		if(arguments.length == 0){
-			return this.then(event=>{
+	forResult() {
+		if (arguments.length == 0) {
+			return this.then(event => {
 				return Promise.resolve(event.result);
 			});
-		}else if(arguments.length == 1){
-			return this.then(event=>{
+		} else if (arguments.length == 1) {
+			return this.then(event => {
 				return Promise.resolve(event.result[arguments[0]]);
 			});
-		}else{
-			return this.then(event=>{
-				return Promise.resolve(Array.from(arguments).map(key=>event.result[key]));
+		} else {
+			return this.then(event => {
+				return Promise.resolve(Array.from(arguments).map(key => event.result[key]));
 			});
 		}
 	}
@@ -205,7 +217,7 @@ export class GameEventPromise extends Promise {
 	 * 
 	 * @returns {Promise<boolean>} 返回的bool项
 	 */
-	forResultBool(){
+	forResultBool() {
 		return this.forResult('bool');
 	}
 
@@ -215,7 +227,7 @@ export class GameEventPromise extends Promise {
 	 * @returns {Promise<Player[]>} 返回的targets项。
 	 * 
 	 */
-	forResultTargets(){
+	forResultTargets() {
 		return this.forResult('targets');
 	}
 
@@ -225,7 +237,7 @@ export class GameEventPromise extends Promise {
 	 * @returns {Promise<Card[]>} 返回的cards项。
 	 * 
 	 */
-	forResultCards(){
+	forResultCards() {
 		return this.forResult('cards');
 	}
 
@@ -235,7 +247,7 @@ export class GameEventPromise extends Promise {
 	 * @returns {Promise<VCard>|Promise<Card>} 返回的card项。
 	 * 
 	 */
-	forResultCard(){
+	forResultCard() {
 		return this.forResult('card');
 	}
 
@@ -244,7 +256,7 @@ export class GameEventPromise extends Promise {
 	 * 
 	 * @returns {Promise<string>} 返回的control项。
 	 */
-	forResultControl(){
+	forResultControl() {
 		return this.forResult('control');
 	}
 
@@ -253,7 +265,7 @@ export class GameEventPromise extends Promise {
 	 * 
 	 * @returns {Promise<Array<any>>} 返回的links项。
 	 */
-	forResultLinks(){
+	forResultLinks() {
 		return this.forResult('links');
 	}
 }

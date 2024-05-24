@@ -6533,8 +6533,9 @@ export class Library extends Uninstantable {
 								code = container.textarea.value;
 							}
 							try {
-								var character = null;
-								eval(code);
+								// IC97 Patched
+								debugger; // NEED TO VIEW DATA
+								var { character } = security.exec2(code);
 								if (!Array.isArray(character)) {
 									throw ('err');
 								}
@@ -6627,8 +6628,9 @@ export class Library extends Uninstantable {
 								code = container.textarea.value;
 							}
 							try {
-								var character = null;
-								eval(code);
+								// IC97 Patched
+								debugger; // NEED TO VIEW DATA
+								var { character } = security.exec2(code);
 								if (!Array.isArray(character)) {
 									throw ('err');
 								}
@@ -7072,8 +7074,9 @@ export class Library extends Uninstantable {
 								code = container.textarea.value;
 							}
 							try {
-								var character = null;
-								eval(code);
+								// IC97 Patched
+								debugger; // NEED TO VIEW DATA
+								var { character } = security.exec2(code);
 								if (!get.is.object(character)) {
 									throw ('err');
 								}
@@ -7957,7 +7960,9 @@ export class Library extends Uninstantable {
 			if (Array.isArray(context)) {
 				try {
 					const code = context.length == 1 ? context[0].string : context.reduceRight((pre, cur) => (pre.string || pre) + '.' + cur.string);
-					obj = eval(code);
+					// IC97 Patched
+					debugger; // NEED TO VIEW DATA
+					obj = security.eval(`return ${code};`);
 					if (![null, undefined].includes(obj)) {
 						const keys = Object.getOwnPropertyNames(obj).concat(Object.getOwnPropertyNames(Object.getPrototypeOf(obj))).filter(key => key.startsWith(token.string));
 						list.addArray(keys);
@@ -12111,8 +12116,11 @@ export class Library extends Uninstantable {
 			log: function () {
 				var items = [];
 				try {
+					// IC97 Patched
+					debugger; // NEED TO VIEW DATA
 					for (var i = 0; i < arguments.length; i++) {
-						eval('items.push(' + arguments[i] + ')');
+						// IC97 Patched
+						items.push(security.eval(`return ${arguments[i]}`));
 					}
 				}
 				catch (e) {

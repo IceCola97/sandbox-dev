@@ -290,7 +290,9 @@ export class LibInit extends Uninstantable {
 				if (data.includes('sojson') || data.includes('jsjiami') || data.includes('var _0x')) alert(`检测到您安装了使用免费版sojson进行加密的扩展。请谨慎使用这些扩展，避免游戏数据遭到破坏。\n扩展文件：${pathToRead}`);
 			}
 			try {
-				window.eval(data);
+				// IC97 Patched
+				debugger; // NEED TO VIEW DATA
+				security.eval(data);
 				if (typeof onLoad == 'function') onLoad();
 			}
 			catch (error) {
@@ -602,10 +604,9 @@ export class LibInit extends Uninstantable {
 		let ModAsyncFunction = AsyncFunction;
 		// let ModAsyncGeneratorFunction = AsyncGeneratorFunction;
 
-		// TODO: 对于本地代码考虑放过
 		// 虽然现在 parsex 被控制到了沙盒，
 		// 但是因为默认沙盒还是可以额外操作东西，
-		// 故而对此再进行一层包裹
+		// 故而对不同的运行域做了区分
 		if (security.SANDBOX_ENABLED) {
 			const domain = Marshal.getMarshalledDomain(item) || Domain.caller;
 
@@ -688,9 +689,10 @@ export class LibInit extends Uninstantable {
 					'card', 'cards', 'skill', 'forced', 'num', 'trigger', 'result',
 					'_status', 'lib', 'game', 'ui', 'get', 'ai', str));
 			} else {
-				return scope(`function${hasDebugger ? '*' : ''} anonymous(event,step,source,player,target,targets,
+				// IC97 Patched
+				return scope(`function${hasDebugger ? '*' : ''} (event,step,source,player,target,targets,
 						card,cards,skill,forced,num,trigger,result,
-						_status,lib,game,ui,get,ai){${str}}; anonymous;`);
+						_status,lib,game,ui,get,ai){${str}}`);
 			}
 		}
 		switch (typeof item) {
@@ -791,7 +793,9 @@ export class LibInit extends Uninstantable {
 
 	static eval(func) {
 		if (typeof func == 'function') {
-			return eval('(' + func.toString() + ')');
+			// IC97 Patched
+			// return eval('(' + func.toString() + ')');
+			return security.eval(`return (${func.toString()});`);
 		}
 		else if (typeof func == 'object') {
 			for (var i in func) {
@@ -799,7 +803,9 @@ export class LibInit extends Uninstantable {
 					if (typeof func[i] == 'function') {
 						let checkObject = {};
 						checkObject[i] = func[i];
-						return eval(`(function(){return ${get.stringify(checkObject)};})()`)[i];
+						// IC97 Patched
+						// return eval(`(function(){return ${get.stringify(checkObject)};})()`)[i];
+						return security.eval(`return ${get.stringify(checkObject)};`)[i];
 					} else {
 						func[i] = lib.init.eval(func[i]);
 					}

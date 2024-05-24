@@ -1385,15 +1385,54 @@ export class Get extends Uninstantable {
 	static #arrowPattern = /^(?:([\w$]+)|\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\))\s*=>/;
 	static #fullPattern = /^([\w\s*]+)\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\)\s*\{/;
 
-	// TODO: 重构增加反注入
+	/**
+	 * ```plain
+	 * 测试一段代码是否为函数体
+	 * ```
+	 * 
+	 * @param {string} code 
+	 * @returns {boolean} 
+	 */
+	static isFunctionBody(code) {
+		try {
+			new Function(code);
+		} catch (e) {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * ```plain
+	 * 清洗函数体代码
+	 * ```
+	 * 
+	 * @param {string} str 
+	 * @returns 
+	 */
 	static pureFunctionStr(str) {
 		str = str.trim();
-		if (get.#arrowPattern.test(str)) return str;
+		// TODO: 箭头函数能检查async写法吗？
+		const arrowMatch = get.#arrowPattern.exec(str);
+		if (arrowMatch) {
+			const body = `return ${str.slice(arrowMatch[0].length)}`;
+			if (!get.isFunctionBody(body)) {
+				console.error("发现疑似恶意的远程代码:", str);
+				return `()=>console.error("尝试执行疑似恶意的远程代码")`;
+			}
+			return `${arrowMatch[0]}{${body}}`;
+		}
+		if (!str.endsWith("}")) return '()=>console.warn("无法识别的远程代码")';
 		const fullMatch = get.#fullPattern.exec(str);
 		if (!fullMatch) return '()=>console.warn("无法识别的远程代码")';
 		const head = fullMatch[1];
 		const args = fullMatch[2] || '';
-		str = `(${args}){${str.slice(fullMatch[0].length)}`;
+		const body = str.slice(fullMatch[0].length).slice(0, -1);
+		if (!get.isFunctionBody(body)) {
+			console.error("发现疑似恶意的远程代码:", str);
+			return `()=>console.error("尝试执行疑似恶意的远程代码")`;
+		}
+		str = `(${args}){${body}}`;
 		if (head.includes("*")) str = "*" + str;
 		str = "function" + str;
 		if (/\basync\b/.test(head)) str = "async " + str;
@@ -1415,18 +1454,18 @@ export class Get extends Uninstantable {
 	}
 	static infoFuncOL(info) {
 		// IC97 Patched
-		console.log("[infoFuncOL] info =", info);
+		// console.log("[infoFuncOL] info =", info);
 		let func;
-		const str = get.pureFunctionStr(info.slice(13));
-		console.log("[infoFuncOL] pured =", str);
+		const str = get.pureFunctionStr(info.slice(13)); // 清洗函数并阻止注入
+		// console.log("[infoFuncOL] pured =", str);
 		try {
 			// js内置的函数
 			if ((/\{\s*\[native code\]\s*\}/).test(str)) return function () { };
-			if (security.SANDBOX_ENABLED) {
+			if (security.isSandboxRequired()) {
 				const loadStr = `return (${str});`;
 				const box = security.currentSandbox();
 				func = box.exec(loadStr);
-			} else eval(`func = (${str});`);
+			} else func = security.exec(`return (${str});`);
 		} catch (e) {
 			console.error(`${e} in \n${str}`);
 			return function () { };
@@ -4744,6 +4783,19 @@ export class Get extends Uninstantable {
 	}
 	static attitude2(to) { return get.attitude(_status.event.player, to); }
 }
+
+// IC97 Patched
+function freezeSlot(obj, key) {
+	const descriptor = Reflect.getOwnPropertyDescriptor(obj, key);
+	descriptor.writable = false;
+	descriptor.configurable = false;
+	Reflect.defineProperty(obj, key, descriptor);
+}
+
+freezeSlot(Get, "isFunctionBody");
+freezeSlot(Get, "pureFunctionStr");
+freezeSlot(Get, "funcInfoOL");
+freezeSlot(Get, "infoFuncOL");
 
 export const get = Get;
 

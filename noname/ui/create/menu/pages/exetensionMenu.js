@@ -19,6 +19,9 @@ import {
 import { ui, game, get, ai, lib, _status } from "../../../../../noname.js";
 import { nonameInitialized } from "../../../../util/index.js";
 
+// IC97 Patched
+import security from "../../../../util/security.js";
+
 export const extensionMenu = function (connectMenu) {
 	if (connectMenu) return;
 	/**
@@ -338,12 +341,15 @@ export const extensionMenu = function (connectMenu) {
 				}
 				inputExtName.disabled = true;
 				setTimeout(function () {
+					// IC97 Patched
 					var ext = {};
-					var config = null, help = null;
+					var config = null, help = null; // 好像这两个变量没有用？看看原来的代码怎么写的吧
+					debugger; // NEED TO VIEW DATA
 					for (var i in dash4.content) {
 						try {
 							if (i == 'content' || i == 'precontent') {
-								eval('ext[i]=' + dash4.content[i]);
+								// IC97 Patched
+								({ config, help, return: ext[i] } = security.exec2(`return (${dash4.content[i]});`));
 								if (typeof ext[i] != 'function') {
 									throw ('err');
 								}
@@ -352,8 +358,10 @@ export const extensionMenu = function (connectMenu) {
 								}
 							}
 							else {
-								eval(dash4.content[i]);
-								eval('ext[i]=' + i);
+								// IC97 Patched
+								// eval(dash4.content[i]);
+								// eval('ext[i]=' + i);
+								({ config, help, return: ext[i] } = security.exec2(`${dash4.content[i]}; return (${i});`));
 								if (ext[i] == null || typeof ext[i] != 'object') {
 									throw ('err');
 								}
@@ -1572,8 +1580,8 @@ export const extensionMenu = function (connectMenu) {
 						code = container.textarea.value;
 					}
 					try {
-						var card = null;
-						eval(code);
+						debugger; // NEED TO VIEW DATA
+						var { card } = security.exec2(code);
 						if (card == null || typeof card != 'object') {
 							throw ('err');
 						}
@@ -1659,8 +1667,8 @@ export const extensionMenu = function (connectMenu) {
 					page.content.pack.translate[name] = translate;
 					page.content.pack.translate[name + '_info'] = info;
 					try {
-						var card = null;
-						eval(container.code);
+						debugger; // NEED TO VIEW DATA
+						var { card } = security.exec2(container.code);
 						if (card == null || typeof card != 'object') {
 							throw ('err');
 						}
@@ -2010,8 +2018,8 @@ export const extensionMenu = function (connectMenu) {
 						code = container.textarea.value;
 					}
 					try {
-						var skill = null;
-						eval(code);
+						debugger; // NEED TO VIEW DATA
+						var { skill } = security.exec2(code);
 						if (skill == null || typeof skill != 'object') {
 							throw ('err');
 						}
@@ -2179,8 +2187,8 @@ export const extensionMenu = function (connectMenu) {
 					page.content.pack.translate[name] = translate;
 					page.content.pack.translate[name + '_info'] = info;
 					try {
-						var skill = null;
-						eval(container.code);
+						debugger; // NEED TO VIEW DATA
+						var { skill } = security.exec2(container.code);
 						if (skill == null || typeof skill != 'object') {
 							throw ('err');
 						}
@@ -2295,22 +2303,22 @@ export const extensionMenu = function (connectMenu) {
 						}
 						try {
 							if (link == 'content' || link == 'precontent') {
-								var func = null;
-								eval('func=' + code);
+								debugger; // NEED TO VIEW DATA
+								var { func } = security.exec2(`func = ${code}`);
 								if (typeof func != 'function') {
 									throw ('err');
 								}
 							}
 							else if (link == 'config') {
-								var config = null;
-								eval(code);
+								debugger; // NEED TO VIEW DATA
+								var { config } = security.exec2(code);
 								if (config == null || typeof config != 'object') {
 									throw ('err');
 								}
 							}
 							else if (link == 'help') {
-								var help = null;
-								eval(code);
+								debugger; // NEED TO VIEW DATA
+								var { help } = security.exec2(code);
 								if (help == null || typeof help != 'object') {
 									throw ('err');
 								}

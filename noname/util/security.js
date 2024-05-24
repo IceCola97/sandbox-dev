@@ -1,5 +1,8 @@
 import { Sandbox, Domain, Marshal, Monitor, AccessAction, Rule, SANDBOX_ENABLED } from "./sandbox.js";
 
+// 是否强制所有模式下使用沙盒
+const SANDBOX_FORCED = false;
+
 let initialized = false;
 
 /** @type {Array<Sandbox>} */
@@ -17,7 +20,9 @@ const topVariables = {
     _status: null,
     gnc: null,
 };
-let connectMode = false;
+const defaultEval = window.eval;
+
+let sandBoxRequired = SANDBOX_FORCED;
 
 // 可能的垫片函数
 const pfPrototypes = ["Object", "Array", "String", "Map"]; // 传递的实例垫片
@@ -132,22 +137,112 @@ function currentSandbox() {
 
 /**
  * ```plain
- * 进入联网传输模式
+ * 进入沙盒运行模式
  * ```
  */
-function enterConnectMode() {
-    connectMode = true;
+function requireSandbox() {
+    sandBoxRequired = true;
 }
 
 /**
  * ```plain
- * 判断是否联网传输模式
+ * 判断是否是沙盒运行模式
  * ```
  * 
  * @returns {boolean} 
  */
-function isConnectMode() {
-    return connectMode;
+function isSandboxRequired() {
+    return SANDBOX_ENABLED && sandBoxRequired;
+}
+
+/**
+ * ```plain
+ * 简单的、不带上下文的模拟eval函数
+ * 
+ * 自动根据沙盒的启用状态使用不同的实现
+ * ```
+ * 
+ * @param {any} x 
+ * @returns {any} 
+ */
+function _eval(x) {
+    if (!SANDBOX_ENABLED || !sandBoxRequired)
+        return new Function(x)();
+
+    return defaultSandbox.exec(x);
+}
+
+/**
+ * ```plain
+ * 携带简单上下文的eval函数
+ * 
+ * 自动根据沙盒的启用状态使用不同的实现
+ * ```
+ * 
+ * @param {any} x 
+ * @param {Object} scope 
+ * @returns {any} 
+ */
+function _exec(x, scope) {
+    if (isPrimitive(scope))
+        scope = {};
+
+    if (!SANDBOX_ENABLED || !sandBoxRequired) {
+        new Function(x);
+        const name = "_" + Math.random().toString(36).slice(2);
+        return new Function(name, `with(${name}){${x}}`)(scope);
+    }
+
+    return defaultSandbox.exec(x, scope);
+}
+
+/**
+ * ```plain
+ * 携带简单上下文的eval函数，并返回scope
+ * eval代码的返回值将覆盖 `scope.return` 这个属性
+ * 另外任意因对未定义变量赋值导致全局变量赋值的行为将被转移到scope里面
+ * 
+ * 自动根据沙盒的启用状态使用不同的实现
+ * ```
+ * 
+ * @param {any} x 
+ * @param {Object|"window"} scope 传入一个对象作为上下文，或者传入 "window" 来生成一个包含指向自身的 `window` 属性的对象
+ * @returns {Object} 
+ */
+function _exec2(x, scope = {}) {
+    if (scope == "window") {
+        scope = {};
+        scope.window = scope;
+    } else if (isPrimitive(scope))
+        scope = {};
+
+    if (!SANDBOX_ENABLED || !sandBoxRequired) {
+        new Function(x);
+
+        const intercepter = new Proxy(scope, {
+            get(target, prop, receiver) {
+                if (prop === Symbol.unscopables)
+                    return undefined;
+
+                if (!Reflect.has(target, prop)
+                    && !Reflect.has(window, prop))
+                    throw new ReferenceError(`"${prop}" is not defined`);
+
+                return Reflect.get(target, prop, receiver) || window[prop];
+            },
+            has(target, prop) {
+                return true;
+            },
+        });
+
+        const result = new Function("_", `with(_){${x}}`)(intercepter);
+        scope.return = result;
+        return scope;
+    }
+
+    const [result] = defaultSandbox.exec2(x, scope);
+    scope.return = result;
+    return scope;
 }
 
 function initSecurity({
@@ -198,8 +293,9 @@ function initSecurity({
     ];
 
     const accessDenieds = [
-        ...ioFuncs.map(n => game[n]),
+        ...ioFuncs.map(n => game[n]).filter(Boolean),
         ...Object.values(game.promises),
+        defaultEval,
         window.require,
         window,
     ];
@@ -213,6 +309,20 @@ function initSecurity({
         Marshal.setRule(o, callRule);
     });
 
+    const bannedRule = new Rule();
+    bannedRule.canMarshal = false; // 禁止获取
+    bannedRule.setGranted(AccessAction.READ, false); // 禁止读取属性
+    bannedRule.setGranted(AccessAction.WRITE, false); // 禁止读取属性
+
+    // 禁止访问关键对象
+    [
+        lib.cheat,
+        lib.node,
+        lib.message,
+    ]
+        .filter(Boolean)
+        .forEach(o => Marshal.setRule(o, bannedRule));
+
     const writeRule = new Rule();
     writeRule.setGranted(AccessAction.WRITE, false); // 禁止写入属性
     writeRule.setGranted(AccessAction.DEFINE, false); // 禁止重定义属性
@@ -225,7 +335,8 @@ function initSecurity({
         .require("property", ...ioFuncs)
         .then(() => {
             throw "禁止修改关键函数";
-        });
+        })
+        .start(); // 差点忘记启动了喵
 
     // 监听原型、toStringTag的更改
     const toStringTag = Symbol.toStringTag;
@@ -241,17 +352,6 @@ function initSecurity({
             control.setReturnValue(false);
         })
         .start();
-
-    const defaultEval = window.eval;
-    window.eval = (x) => {
-        if (!Domain.isBelievable(Domain.topDomain))
-            throw "无法在沙盒里面访问";
-
-        if (!get.isPrimitive(x) && !Domain.topDomain.isFrom(x))
-            throw "尝试执行不安全的代码";
-
-        return defaultEval(x);
-    };
 
     initialized = true;
 }
@@ -270,8 +370,9 @@ function createSandbox() {
     const box = new Sandbox();
     box.initBuiltins();
 
-    // TODO: 仅提供必要的document函数
-    box.document = document; // 向沙盒提供顶级运行域的文档对象
+    // 向沙盒提供顶级运行域的文档对象
+    // TODO: 仅提供必要的document函数(?)
+    box.document = document;
 
     // 传递七个变量
     Object.assign(box.scope, topVariables);
@@ -424,9 +525,15 @@ if (SANDBOX_ENABLED) {
 
     ModFunction = new Proxy(defaultFunction, {
         apply(target, thisArg, argumentsList) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedFunction(...argumentsList);
         },
         construct(target, argumentsList, newTarget) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedFunction(...argumentsList);
         },
     });
@@ -434,9 +541,15 @@ if (SANDBOX_ENABLED) {
     /** @type {typeof Function} */
     ModGeneratorFunction = new Proxy(defaultGeneratorFunction, {
         apply(target, thisArg, argumentsList) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedGeneratorFunction(...argumentsList);
         },
         construct(target, argumentsList, newTarget) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedGeneratorFunction(...argumentsList);
         },
     });
@@ -444,9 +557,15 @@ if (SANDBOX_ENABLED) {
     /** @type {typeof Function} */
     ModAsyncFunction = new Proxy(defaultAsyncFunction, {
         apply(target, thisArg, argumentsList) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedAsyncFunction(...argumentsList);
         },
         construct(target, argumentsList, newTarget) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedAsyncFunction(...argumentsList);
         },
     });
@@ -454,9 +573,15 @@ if (SANDBOX_ENABLED) {
     /** @type {typeof Function} */
     ModAsyncGeneratorFunction = new Proxy(defaultAsyncGeneratorFunction, {
         apply(target, thisArg, argumentsList) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedAsyncGeneratorFunction(...argumentsList);
         },
         construct(target, argumentsList, newTarget) {
+            if (!sandBoxRequired)
+                return new target(...argumentsList);
+
             return new IsolatedAsyncGeneratorFunction(...argumentsList);
         },
     });
@@ -487,9 +612,12 @@ const exports = {
     isUnsafeObject,
     assertSafeObject,
     getIsolateds,
-    enterConnectMode,
-    isConnectMode,
+    requireSandbox,
+    isSandboxRequired,
     initSecurity,
+    eval: _eval,
+    exec: _exec,
+    exec2: _exec2,
     SANDBOX_ENABLED,
 };
 
