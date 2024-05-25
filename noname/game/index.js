@@ -1274,6 +1274,14 @@ export class Game extends Uninstantable {
 		}
 	}
 	/**
+	 * ```plain
+	 * 进入沙盒运行模式
+	 * ```
+	 */
+	static requireSandbox() {
+		security.requireSandbox();
+	}
+	/**
 	 * @param { string } ip 
 	 * @param { (result: boolean) => any } callback 
 	 */

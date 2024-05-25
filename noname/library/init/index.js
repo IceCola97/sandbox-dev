@@ -690,9 +690,10 @@ export class LibInit extends Uninstantable {
 					'_status', 'lib', 'game', 'ui', 'get', 'ai', str));
 			} else {
 				// IC97 Patched
-				return scope(`function${hasDebugger ? '*' : ''} (event,step,source,player,target,targets,
+				new ModFunction(str); // 防止注入喵
+				return scope(`(function${hasDebugger ? '*' : ''} (event,step,source,player,target,targets,
 						card,cards,skill,forced,num,trigger,result,
-						_status,lib,game,ui,get,ai){${str}}`);
+						_status,lib,game,ui,get,ai){${str}})`);
 			}
 		}
 		switch (typeof item) {

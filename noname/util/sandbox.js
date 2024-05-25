@@ -105,6 +105,8 @@ class AccessAction {
  * ```
  */
 class Rule {
+    /** @type {Domain} */
+    #domain = null;
     #allowMarshal = true;
 
     /** @type {WeakSet<Domain>?} */
@@ -123,6 +125,8 @@ class Rule {
      * @param {Rule} rule 
      */
     constructor(rule = null) {
+        this.#domain = Domain.current;
+
         if (rule instanceof Rule) {
             this.#allowMarshal = rule.#allowMarshal;
             this.#allowMarshalTo = rule.#allowMarshalTo;
@@ -130,6 +134,18 @@ class Rule {
             this.#permissions = rule.#permissions.slice();
             this.#accessControl = rule.#accessControl;
         }
+    }
+    
+    /**
+     * ```plain
+     * 检查当前是否是 Monitor 所属的运行域
+     * ```
+     * 
+     * @param {Rule} thiz 
+     */
+    static #assertOperator = function (thiz) {
+        if (thiz.#domain !== Domain.current)
+            throw new Error("当前不是 Rule 所属的运行域");
     }
 
     /**
@@ -140,6 +156,7 @@ class Rule {
      * @type {boolean}
      */
     get canMarshal() {
+        Rule.#assertOperator(this);
         return this.#allowMarshal;
     }
 
@@ -151,6 +168,7 @@ class Rule {
      * @type {boolean}
      */
     set canMarshal(newValue) {
+        Rule.#assertOperator(this);
         this.#allowMarshal = !!newValue;
     }
 
@@ -163,6 +181,8 @@ class Rule {
      * @returns {boolean} 
      */
     canMarshalTo(domain) {
+        Rule.#assertOperator(this);
+
         if (!this.#allowMarshal)
             return false;
 
@@ -184,6 +204,8 @@ class Rule {
      * @param {Domain} domain 
      */
     allowMarshalTo(domain) {
+        Rule.#assertOperator(this);
+
         if (!this.#allowMarshalTo) {
             if (this.#disallowMarshalTo)
                 throw new TypeError("封送黑名单与封送白名单不能同时存在");
@@ -204,6 +226,8 @@ class Rule {
      * @param {Domain} domain 
      */
     disallowMarshalTo(domain) {
+        Rule.#assertOperator(this);
+
         if (!this.#disallowMarshalTo) {
             if (this.#allowMarshalTo)
                 throw new TypeError("封送黑名单与封送白名单不能同时存在");
@@ -223,6 +247,8 @@ class Rule {
      * @returns {boolean} 
      */
     isGranted(action) {
+        Rule.#assertOperator(this);
+
         if (!AccessAction.isAccessAction(action))
             throw new TypeError("参数 action 不是一个有效的操作");
 
@@ -238,6 +264,8 @@ class Rule {
      * @param {boolean} granted 
      */
     setGranted(action, granted) {
+        Rule.#assertOperator(this);
+
         if (!AccessAction.isAccessAction(action))
             throw new TypeError("参数 action 不是一个有效的操作");
 
@@ -254,6 +282,8 @@ class Rule {
      * @returns {boolean} 
      */
     canAccess(action, ...args) {
+        Rule.#assertOperator(this);
+
         if (!this.isGranted(action))
             return false;
         if (this.#accessControl
@@ -274,6 +304,8 @@ class Rule {
      * @param {(...) => boolean} accessControl 
      */
     setAccessControl(accessControl) {
+        Rule.#assertOperator(this);
+
         if (typeof accessControl != "function")
             throw new TypeError("无效的权限控制器");
         if (this.#accessControl)
@@ -406,6 +438,12 @@ class Globals {
     static #topGlobals = null;
     /** @type {WeakMap<Domain, [WeakMap, Object]>} */
     static #globals = new WeakMap();
+    /** @type {Object<string, true>} */
+    static #builtinKeys = {};
+
+    static isBuiltinKey(key) {
+        return key in Globals.#builtinKeys; // 基于hash的存在性检查效率最高喵
+    }
 
     /**
      * ```plain
@@ -482,6 +520,9 @@ class Globals {
 
                     globals[2][key] = obj;
                 }
+
+                for (const key of Reflect.ownKeys(window))
+                    Globals.#builtinKeys[key] = true;
             }
 
             for (const path of GLOBAL_PATHES) {
@@ -1324,6 +1365,18 @@ class Monitor {
 
     /**
      * ```plain
+     * 检查当前是否是 Monitor 所属的运行域
+     * ```
+     * 
+     * @param {Monitor} thiz 
+     */
+    static #assertOperator = function (thiz) {
+        if (thiz.#domain !== Domain.current)
+            throw new Error("当前不是 Monitor 所属的运行域");
+    }
+
+    /**
+     * ```plain
      * 获取 Monitor 所属的运行域
      * ```
      */
@@ -1341,6 +1394,8 @@ class Monitor {
      * @returns {this} 
      */
     allow(...domains) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (!domains.length)
@@ -1375,6 +1430,8 @@ class Monitor {
      * @returns {this} 
      */
     disallow(...domains) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (!domains.length)
@@ -1405,6 +1462,8 @@ class Monitor {
      * @returns {this} 
      */
     action(...action) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (action.length == 0
@@ -1440,6 +1499,8 @@ class Monitor {
      * @returns {this} 
      */
     require(name, ...values) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (typeof name != "string")
@@ -1493,6 +1554,8 @@ class Monitor {
      * @returns {this} 
      */
     filter(filter) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (typeof filter != "function")
@@ -1551,6 +1614,8 @@ class Monitor {
      * @returns {this} 
      */
     then(handler) {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 在启动期间不能修改");
         if (typeof handler != "function")
@@ -1577,6 +1642,8 @@ class Monitor {
      * ```
      */
     start() {
+        Monitor.#assertOperator(this);
+
         if (this.isStarted)
             throw new Error("Monitor 已经启动");
         if (typeof this.#handler != "function")
@@ -1592,6 +1659,8 @@ class Monitor {
      * ```
      */
     stop() {
+        Monitor.#assertOperator(this);
+
         if (!this.isStarted)
             throw new Error("Monitor 还未启动");
 
@@ -2725,6 +2794,19 @@ class Sandbox {
     #domainFunction = Function;
 
     /**
+     * ```plain
+     * 当在当前scope中访问不到变量时，
+     * 是否允许沙盒代码可以穿透到顶级域的全局变量域中
+     * 去读取部分非内建的全局变量（仅读取）
+     * 
+     * 此开关有风险，请谨慎使用
+     * ```
+     * 
+     * @type {boolean} 
+     */
+    #freeAccess = false;
+
+    /**
      * @param {Object?} initScope 用于初始化scope的对象
      */
     constructor() {
@@ -2737,6 +2819,18 @@ class Sandbox {
         Sandbox.#domainMap.set(this.#domain, this);
         Sandbox.#createScope(this);
         Sandbox.#initDomainFunctions(this, this.#domain, this.#domainWindow);
+    }
+
+    /**
+     * ```plain
+     * 检查沙盒操作运行域
+     * ```
+     * 
+     * @param {Sandbox} thiz 
+     */
+    static #assertOperator = function (thiz) {
+        if (thiz.#sourceDomain !== Domain.current)
+            throw new TypeError("当前运行域不是沙盒的所有运行域");
     }
 
     /**
@@ -2803,6 +2897,7 @@ class Sandbox {
      * @type {Object}
      */
     get scope() {
+        Sandbox.#assertOperator(this);
         return trapMarshal(this.#domain, Domain.current, this.#scope);
     }
 
@@ -2825,6 +2920,7 @@ class Sandbox {
      * @type {Document}
      */
     get document() {
+        Sandbox.#assertOperator(this);
         return trapMarshal(this.#domain, Domain.current, this.#domainDocument);
     }
 
@@ -2836,8 +2932,41 @@ class Sandbox {
      * @type {Document}
      */
     set document(value) {
+        Sandbox.#assertOperator(this);
         this.#domainDocument = Marshal[SandboxExposer2]
             (SandboxSignal_Marshal, value, this.#domain);
+    }
+
+    /**
+     * ```plain
+     * 当在当前scope中访问不到变量时，
+     * 是否允许沙盒代码可以穿透到顶级域的全局变量域中
+     * 去读取部分非内建的全局变量（仅读取）
+     * 
+     * 此开关有风险，请谨慎使用
+     * ```
+     * 
+     * @type {boolean} 
+     */
+    get freeAccess() {
+        Sandbox.#assertOperator(this);
+        return this.#freeAccess;
+    }
+
+    /**
+     * ```plain
+     * 当在当前scope中访问不到变量时，
+     * 是否允许沙盒代码可以穿透到顶级域的全局变量域中
+     * 去读取部分非内建的全局变量（仅读取）
+     * 
+     * 此开关有风险，请谨慎使用
+     * ```
+     * 
+     * @type {boolean} 
+     */
+    set freeAccess(value) {
+        Sandbox.#assertOperator(this);
+        this.#freeAccess = !!value;
     }
 
     /**
@@ -2849,6 +2978,8 @@ class Sandbox {
      * ```
      */
     initBuiltins() {
+        Sandbox.#assertOperator(this);
+
         /**
          * ```plain
          * 如果要扩充沙盒的内建函数或类，请在此增加喵
@@ -2945,6 +3076,7 @@ class Sandbox {
      * ```
      */
     pushScope() {
+        Sandbox.#assertOperator(this);
         this.#scopeStack.push(this.#scope);
         Sandbox.#createScope(this);
     }
@@ -2955,6 +3087,8 @@ class Sandbox {
      * ```
      */
     popScope() {
+        Sandbox.#assertOperator(this);
+
         if (!this.#scopeStack)
             throw new ReferenceError("没有更多的scope可以弹出");
 
@@ -2978,6 +3112,7 @@ class Sandbox {
         paramList = null, inheritScope = false, writeContext = 'exists') {
         if (typeof code != "string")
             throw new TypeError("代码需要是一个字符串");
+
         if (isPrimitive(context))
             context = {};
 
@@ -2994,7 +3129,7 @@ class Sandbox {
 
         let argumentList;
 
-        const raw = new thiz.#domainFunction("_", `with(_){with(window){with(${contextName}){return(function(${parameters}){\n${code}\n}).call(${contextName}.this,...${argsName});}}}`);
+        const raw = new thiz.#domainFunction("_", `with(_){with(window){with(${contextName}){return(()=>{"use strict";return(function(${parameters}){\n// 沙盒代码起始\n${code}\n// 沙盒代码结束\n}).call(${contextName}.this,...${argsName})})()}}}`);
 
         const domain = thiz.#domain;
         const domainWindow = thiz.#domainWindow;
@@ -3016,8 +3151,18 @@ class Sandbox {
 
                 if (p === Symbol.unscopables)
                     return undefined;
-                if (!(p in target))
+
+                if (!(p in target)) {
+                    if (thiz.#freeAccess
+                        && !Globals.isBuiltinKey(p)) {
+                        const topWindow = Domain.topDomain[SandboxExposer](SandboxSignal_GetWindow);
+
+                        if (p in topWindow)
+                            return trapMarshal(Domain.topDomain, domain, topWindow[p]);
+                    }
+
                     throw new domainWindow.ReferenceError(`${p} is not defined`);
+                }
 
                 return target[p];
             },

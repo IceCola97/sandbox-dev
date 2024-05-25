@@ -1,7 +1,7 @@
 import { Sandbox, Domain, Marshal, Monitor, AccessAction, Rule, SANDBOX_ENABLED } from "./sandbox.js";
 
 // 是否强制所有模式下使用沙盒
-const SANDBOX_FORCED = false;
+const SANDBOX_FORCED = true;
 
 let initialized = false;
 
@@ -28,7 +28,7 @@ let sandBoxRequired = SANDBOX_FORCED;
 const pfPrototypes = ["Object", "Array", "String", "Map"]; // 传递的实例垫片
 const pfNamespaces = ["Object", "Array", "Reflect", "Math", "Promise"]; // 传递的静态垫片
 // 可能还要补充喵？
-const nativePattern = /^function \w+\(\) \{ \[native code\] \}$/;
+const nativePattern = /^function \w*\(\) \{ \[native code\] \}$/;
 
 // 垫片备份
 const polyfills = {
@@ -190,7 +190,7 @@ function _exec(x, scope) {
     if (!SANDBOX_ENABLED || !sandBoxRequired) {
         new Function(x);
         const name = "_" + Math.random().toString(36).slice(2);
-        return new Function(name, `with(${name}){${x}}`)(scope);
+        return new Function(name, `with(${name}){return(()=>{"use strict";${x}})()}`)(scope);
     }
 
     return defaultSandbox.exec(x, scope);
@@ -235,7 +235,7 @@ function _exec2(x, scope = {}) {
             },
         });
 
-        const result = new Function("_", `with(_){${x}}`)(intercepter);
+        const result = new Function("_", `with(_){return(()=>{"use strict";\n${x}})()}`)(intercepter);
         scope.return = result;
         return scope;
     }
@@ -368,6 +368,7 @@ function createSandbox() {
         return;
 
     const box = new Sandbox();
+    box.freeAccess = true;
     box.initBuiltins();
 
     // 向沙盒提供顶级运行域的文档对象

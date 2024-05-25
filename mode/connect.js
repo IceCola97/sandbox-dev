@@ -2,7 +2,11 @@
 game.import('mode',function(lib,game,ui,get,ai,_status){
 	return {
 		name:'connect',
-		start:function(){
+		// IC97 Patched
+		init(){
+			game.requireSandbox();
+		},
+		start(){
 			var directstartmode=lib.config.directstartmode;
 			ui.create.menu(true);
 			event.textnode=ui.create.div('','输入联机地址');

@@ -1382,7 +1382,7 @@ export class Get extends Uninstantable {
 	static infoPlayersOL(infos) { return Array.from(infos || []).map(get.infoPlayerOL); }
 
 	// IC97 Patched
-	static #arrowPattern = /^(?:([\w$]+)|\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\))\s*=>/;
+	static #arrowPattern = /^(?:async\b\s*)?(?:([\w$]+)|\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\))\s*=>/;
 	static #fullPattern = /^([\w\s*]+)\((\s*[\w$]+(?:\s*=\s*.+?)?(?:\s*,\s*[\w$]+(?:\s*=\s*.+?)?)*\s*)?\)\s*\{/;
 
 	/**
@@ -1412,7 +1412,6 @@ export class Get extends Uninstantable {
 	 */
 	static pureFunctionStr(str) {
 		str = str.trim();
-		// TODO: 箭头函数能检查async写法吗？
 		const arrowMatch = get.#arrowPattern.exec(str);
 		if (arrowMatch) {
 			const body = `return ${str.slice(arrowMatch[0].length)}`;

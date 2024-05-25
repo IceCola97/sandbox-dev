@@ -496,7 +496,7 @@ export class Player extends HTMLDivElement {
 			} else {
 				recompiledScope = scope || eval;
 			}
-			skill.content = lib.init.parsex(recompiledScope(`function(){\n${str}\n}`), scope && recompiledScope);
+			skill.content = lib.init.parsex(recompiledScope(`(function(){\n${str}\n})`), scope && recompiledScope);
 			// @ts-ignore
 			skill.content._parsed = true;
 		};
